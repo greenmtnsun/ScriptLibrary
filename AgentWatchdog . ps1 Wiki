@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL Agent Watchdog - Project Architecture</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; color: #0f172a; }
+        .chart-container { position: relative; width: 100%; max-width: 900px; margin-left: auto; margin-right: auto; height: 50vh; max-height: 450px; min-height: 300px; }
+        .glass-panel { background: rgba(255, 255, 255, 0.95); box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.01); border: 1px border-slate-200; border-radius: 0.75rem; }
+        .nav-btn.active { border-bottom: 2px solid #0d9488; color: #0d9488; font-weight: 600; }
+        .hidden-section { display: none; }
+        .fade-in { animation: fadeIn 0.4s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="antialiased min-h-screen pb-12">
+
+    <!-- Chosen Palette: Warm IT Neutrals (Slate-50 background, Slate-800 text) with Teal-600 accents and Amber/Red alerts for a professional devops tool feel. -->
+    <!-- Application Structure Plan: The SPA acts as an interactive project blueprint. It's structured into 4 tabs: "Overview & Architecture" (explaining the local deployment model), "Detection Engine" (visualizing the statistical logic via Chart.js), "Edge Cases" (addressing scenarios where past performance fails), and "Action Plan" (the 4-hour research breakdown). This structure directly aligns with the brainstorming notes, transforming them into a structured design document. -->
+    <!-- Visualization & Content Choices: 1. Architecture uses CSS Grid blocks to avoid SVGs while showing local vs central deployment. 2. Detection Engine uses Chart.js (Line/Scatter combo) to visually demonstrate "Mean + StdDev" statistical anomaly detection for runaway jobs. 3. Edge Cases uses interactive toggle cards to explore problems and solutions dynamically. -->
+    <!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+    <nav class="bg-white shadow-sm sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center space-x-3">
+                    <span class="text-2xl">⚙️</span>
+                    <span class="font-bold text-xl text-slate-800 tracking-tight">AgentWatchdog<span class="text-teal-600">.ps1</span></span>
+                </div>
+            </div>
+            <div class="flex space-x-8 -mb-px overflow-x-auto" id="nav-tabs">
+                <button class="nav-btn active whitespace-nowrap pb-4 px-1 text-sm font-medium text-slate-500 hover:text-slate-700" data-target="section-arch">1. Architecture</button>
+                <button class="nav-btn whitespace-nowrap pb-4 px-1 text-sm font-medium text-slate-500 hover:text-slate-700" data-target="section-engine">2. Statistical Engine</button>
+                <button class="nav-btn whitespace-nowrap pb-4 px-1 text-sm font-medium text-slate-500 hover:text-slate-700" data-target="section-edge">3. Edge Cases</button>
+                <button class="nav-btn whitespace-nowrap pb-4 px-1 text-sm font-medium text-slate-500 hover:text-slate-700" data-target="section-plan">4. Research & Action Plan</button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8">
+
+        <section id="section-arch" class="content-section fade-in">
+            <div class="mb-8">
+                <h1 class="text-3xl font-bold text-slate-900 mb-4">Distributed Agent Monitoring</h1>
+                <p class="text-lg text-slate-600 max-w-4xl">Managing thousands of SQL Server Agent jobs across multiple environments often leads to silent failures: jobs that hang indefinitely or run significantly longer than normal, impacting downstream processes. This tool utilizes an independent, localized deployment strategy.</p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+                <div class="glass-panel p-6 border-l-4 border-teal-500">
+                    <div class="text-3xl mb-3">🎯</div>
+                    <h3 class="text-xl font-bold text-slate-800 mb-2">The Goal</h3>
+                    <p class="text-slate-600 text-sm">Automatically identify SQL Agent jobs that are stuck or "runaway" (running excessively long) without relying on arbitrary, hard-coded time limits.</p>
+                </div>
+                <div class="glass-panel p-6 border-l-4 border-indigo-500">
+                    <div class="text-3xl mb-3">🛡️</div>
+                    <h3 class="text-xl font-bold text-slate-800 mb-2">Harden the Approach</h3>
+                    <p class="text-slate-600 text-sm">Build resilient PowerShell scripts. Handle connection drops, missing history data, and ensure the watchdog itself doesn't cause performance bottlenecks.</p>
+                </div>
+                <div class="glass-panel p-6 border-l-4 border-emerald-500">
+                    <div class="text-3xl mb-3">📍</div>
+                    <h3 class="text-xl font-bold text-slate-800 mb-2">Local Deployment</h3>
+                    <p class="text-slate-600 text-sm"><strong>"You don't need to run across multiple servers."</strong> The PS module is deployed locally to each SQL Server, querying local `msdb` directly. No complex cross-server linked queries.</p>
+                </div>
+            </div>
+
+            <div class="glass-panel p-8">
+                <h2 class="text-xl font-bold text-slate-800 mb-6 border-b pb-2">Topology Overview (Local Execution)</h2>
+                <div class="flex flex-col md:flex-row gap-8 items-center justify-center">
+                    
+                    <div class="flex flex-col gap-4 w-full md:w-1/3">
+                        <div class="bg-slate-100 p-4 rounded-lg border border-slate-300 shadow-inner relative">
+                            <div class="absolute -top-3 -left-3 bg-slate-800 text-white text-xs px-2 py-1 rounded">Server A</div>
+                            <div class="flex items-center justify-between mb-2 mt-2">
+                                <span class="font-semibold">SQL Instance (msdb)</span>
+                                <span>🗄️</span>
+                            </div>
+                            <div class="bg-teal-50 text-teal-800 border border-teal-200 p-2 rounded text-sm text-center font-mono">
+                                Watchdog.ps1 (Local)
+                            </div>
+                        </div>
+                        <div class="bg-slate-100 p-4 rounded-lg border border-slate-300 shadow-inner relative">
+                            <div class="absolute -top-3 -left-3 bg-slate-800 text-white text-xs px-2 py-1 rounded">Server B</div>
+                            <div class="flex items-center justify-between mb-2 mt-2">
+                                <span class="font-semibold">SQL Instance (msdb)</span>
+                                <span>🗄️</span>
+                            </div>
+                            <div class="bg-teal-50 text-teal-800 border border-teal-200 p-2 rounded text-sm text-center font-mono">
+                                Watchdog.ps1 (Local)
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="text-4xl text-slate-400 rotate-90 md:rotate-0">
+                        ➔
+                    </div>
+
+                    <div class="w-full md:w-1/3 bg-slate-800 text-white p-6 rounded-xl shadow-lg">
+                        <div class="text-center">
+                            <div class="text-3xl mb-2">🚨</div>
+                            <h3 class="font-bold text-lg mb-2">Central Alerting Hub</h3>
+                            <p class="text-slate-300 text-sm mb-4">Local scripts push anomalies here via webhook or API.</p>
+                            <div class="bg-slate-700 p-2 rounded font-mono text-xs text-amber-300 text-left">
+                                [ALERT] Server B: Job 'Nightly_ETL' running for 145m (Avg: 30m)
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </section>
+
+        <section id="section-engine" class="content-section hidden-section fade-in">
+            <div class="mb-8">
+                <h1 class="text-3xl font-bold text-slate-900 mb-4">Statistical Anomaly Engine</h1>
+                <p class="text-lg text-slate-600 max-w-4xl">Instead of static "alert if > 60 mins" rules, the script analyzes `msdb.dbo.sysjobhistory`. It calculates the rolling mean and standard deviation for each specific job. If a currently running job exceeds the mean by +2 or +3 Standard Deviations, it is flagged as a runaway.</p>
+            </div>
+
+            <div class="glass-panel p-6 mb-8">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-bold text-slate-800">Historical Run Time Analysis: Job "Financial_Sync"</h2>
+                    <div class="flex space-x-2">
+                        <button id="btn-simulate-normal" class="px-3 py-1 bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm rounded transition-colors">Show Normal</button>
+                        <button id="btn-simulate-stuck" class="px-3 py-1 bg-red-100 hover:bg-red-200 text-red-800 font-semibold text-sm rounded transition-colors">Simulate Runaway</button>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="statsChart"></canvas>
+                </div>
+                <div id="chart-insight" class="mt-4 p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 text-sm">
+                    <strong>Insight:</strong> The green band represents the expected run duration (Mean ± 2 StdDev). Current job executions falling within this band are considered healthy.
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="bg-white p-5 border border-slate-200 rounded-lg">
+                    <h4 class="font-bold text-slate-800 mb-2 flex items-center"><span class="mr-2">🧮</span> Math Logic (PowerShell)</h4>
+                    <pre class="bg-slate-900 text-green-400 p-4 rounded text-xs overflow-x-auto">
+$JobHistory = Get-SqlJobHistory -JobName $Name
+$Durations = $JobHistory.RunDurationInSeconds
+
+$Mean = ($Durations | Measure-Object -Average).Average
+$Variance = ($Durations | ForEach-Object { 
+    [math]::Pow($_ - $Mean, 2) 
+} | Measure-Object -Average).Average
+
+$StdDev = [math]::Sqrt($Variance)
+$Threshold = $Mean + (2 * $StdDev)
+
+if ($CurrentRunTime -gt $Threshold) { 
+    Throw "Runaway Job Detected!" 
+}</pre>
+                </div>
+                <div class="bg-white p-5 border border-slate-200 rounded-lg flex flex-col justify-center">
+                    <h4 class="font-bold text-slate-800 mb-2 flex items-center"><span class="mr-2">📈</span> Why Statistics?</h4>
+                    <ul class="space-y-3 text-sm text-slate-600">
+                        <li class="flex items-start"><span class="text-teal-500 mr-2">✔</span> <strong>Self-Adjusting:</strong> As databases grow and normal jobs take naturally longer, the baseline adapts automatically.</li>
+                        <li class="flex items-start"><span class="text-teal-500 mr-2">✔</span> <strong>Zero Configuration:</strong> No need for DBAs to manually input thresholds for thousands of distinct jobs.</li>
+                        <li class="flex items-start"><span class="text-teal-500 mr-2">✔</span> <strong>Reduces Fatigue:</strong> Eliminates false positives caused by arbitrary static limits on normally long-running jobs.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <section id="section-edge" class="content-section hidden-section fade-in">
+            <div class="mb-8">
+                <h1 class="text-3xl font-bold text-slate-900 mb-4">Edge Cases & Solutions</h1>
+                <p class="text-lg text-slate-600 max-w-4xl">"Figure out scenarios where past performance can't be used." Statistics fail when data is sparse, highly volatile, or undergoing structural shifts. Below is the mitigation architecture for these exact scenarios.</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6" id="edge-case-container">
+                
+                <div class="glass-panel p-6 border-t-4 border-amber-400 hover:shadow-lg transition-shadow cursor-pointer" onclick="toggleSolution('sol-1')">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-lg text-slate-800">1. The "First Run" Problem</h3>
+                        <span class="text-amber-500 text-2xl">⚠️</span>
+                    </div>
+                    <p class="text-slate-600 text-sm mb-4">A brand new job has been deployed. There is no historical data in `msdb` to calculate a mean or standard deviation. How do we monitor it?</p>
+                    <div id="sol-1" class="hidden text-sm bg-amber-50 p-4 rounded-md border border-amber-200 text-amber-900 mt-2">
+                        <strong>Solution:</strong> Implement a global fallback threshold parameter (e.g., `-DefaultMaxMinutes 120`). If `$HistoryCount -lt 5`, the script bypasses statistical checks and uses the hardcoded fallback until enough data is collected.
+                    </div>
+                </div>
+
+                <div class="glass-panel p-6 border-t-4 border-blue-400 hover:shadow-lg transition-shadow cursor-pointer" onclick="toggleSolution('sol-2')">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-lg text-slate-800">2. Bimodal Distributions</h3>
+                        <span class="text-blue-500 text-2xl">📊</span>
+                    </div>
+                    <p class="text-slate-600 text-sm mb-4">A job runs daily taking 5 minutes, but on the last day of the month (End of Month Processing), it intentionally takes 4 hours. Daily stats will flag the monthly run.</p>
+                    <div id="sol-2" class="hidden text-sm bg-blue-50 p-4 rounded-md border border-blue-200 text-blue-900 mt-2">
+                        <strong>Solution:</strong> Contextual bucketing. The PS script must analyze job schedules. If a job has different execution schedules (daily vs monthly), it must group the history statistics by the `schedule_id` to create separate baselines.
+                    </div>
+                </div>
+
+                <div class="glass-panel p-6 border-t-4 border-purple-400 hover:shadow-lg transition-shadow cursor-pointer" onclick="toggleSolution('sol-3')">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-lg text-slate-800">3. The Structural Shift</h3>
+                        <span class="text-purple-500 text-2xl">🔨</span>
+                    </div>
+                    <p class="text-slate-600 text-sm mb-4">An index was added, dropping run time from 60m to 5m. Or, 10TB of history was purged, making the job much faster. Past stats (60m) are now irrelevant and won't catch a 40m stuck job.</p>
+                    <div id="sol-3" class="hidden text-sm bg-purple-50 p-4 rounded-md border border-purple-200 text-purple-900 mt-2">
+                        <strong>Solution:</strong> Exponential Moving Average (EMA) or Time-Windowing. Do not use all-time history. Only calculate statistics against the last 14 or 30 days of runs. This allows the baseline to "forget" old performance paradigms.
+                    </div>
+                </div>
+
+                <div class="glass-panel p-6 border-t-4 border-rose-400 hover:shadow-lg transition-shadow cursor-pointer" onclick="toggleSolution('sol-4')">
+                    <div class="flex justify-between items-center mb-3">
+                        <h3 class="font-bold text-lg text-slate-800">4. Infrequent Long-Runners</h3>
+                        <span class="text-rose-500 text-2xl">🐢</span>
+                    </div>
+                    <p class="text-slate-600 text-sm mb-4">A quarterly archiving job takes 12 hours. Because it runs infrequently, a localized temporary spike might throw standard deviations wildly off, preventing alerts.</p>
+                    <div id="sol-4" class="hidden text-sm bg-rose-50 p-4 rounded-md border border-rose-200 text-rose-900 mt-2">
+                        <strong>Solution:</strong> Cap the Standard Deviation multiplier. Implement a Maximum Allowed Standard Deviation value. Additionally, provide a configuration table (or JSON config file locally) allowing DBAs to manually override specific Job IDs to ignore statistical checks.
+                    </div>
+                </div>
+
+            </div>
+            <p class="text-center text-sm text-slate-500 mt-6 italic">Click on any scenario card above to reveal the architectural solution.</p>
+        </section>
+
+        <section id="section-plan" class="content-section hidden-section fade-in">
+            <div class="mb-8">
+                <h1 class="text-3xl font-bold text-slate-900 mb-4">Research & Execution Plan</h1>
+                <p class="text-lg text-slate-600 max-w-4xl">"Take 4 hours. Find helpers if possible. Create scripts or libraries. Start research. Then try it out!"</p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div class="lg:col-span-2 glass-panel p-6">
+                    <h3 class="text-xl font-bold text-slate-800 mb-6 flex items-center">
+                        <span class="bg-teal-100 text-teal-800 px-3 py-1 rounded-full text-sm mr-3">4-Hour Block</span>
+                        Sprint Task List
+                    </h3>
+                    
+                    <div class="space-y-4">
+                        <div class="flex items-start p-3 hover:bg-slate-50 rounded-lg transition-colors border border-transparent hover:border-slate-200 cursor-pointer" onclick="toggleTask(this)">
+                            <div class="task-check mt-1 mr-4 w-5 h-5 rounded border-2 border-slate-300 flex items-center justify-center text-white font-bold text-xs transition-colors"></div>
+                            <div>
+                                <h4 class="font-bold text-slate-800">Hour 1: Core Research & T-SQL Prep</h4>
+                                <p class="text-sm text-slate-600">Research exact `msdb` system tables (`sysjobs`, `sysjobhistory`, `sysjobactivity`). Write base T-SQL queries to extract cleanly formatted historical durations in seconds, filtering out cancelled/failed runs for the baseline.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-start p-3 hover:bg-slate-50 rounded-lg transition-colors border border-transparent hover:border-slate-200 cursor-pointer" onclick="toggleTask(this)">
+                            <div class="task-check mt-1 mr-4 w-5 h-5 rounded border-2 border-slate-300 flex items-center justify-center text-white font-bold text-xs transition-colors"></div>
+                            <div>
+                                <h4 class="font-bold text-slate-800">Hour 2: PowerShell Statistical Logic</h4>
+                                <p class="text-sm text-slate-600">Develop the PS library functions. Write `Measure-JobHistory` to parse the T-SQL output and compute Mean and StdDev. Implement the time-window logic (last 30 days only) to mitigate structural shift edge cases.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-start p-3 hover:bg-slate-50 rounded-lg transition-colors border border-transparent hover:border-slate-200 cursor-pointer" onclick="toggleTask(this)">
+                            <div class="task-check mt-1 mr-4 w-5 h-5 rounded border-2 border-slate-300 flex items-center justify-center text-white font-bold text-xs transition-colors"></div>
+                            <div>
+                                <h4 class="font-bold text-slate-800">Hour 3: The Watchdog Loop & Edge Cases</h4>
+                                <p class="text-sm text-slate-600">Write the main execution block. Query currently *running* jobs. Cross-reference their start times with the statistical baselines. Implement the "First Run" fallback threshold logic.</p>
+                            </div>
+                        </div>
+
+                        <div class="flex items-start p-3 hover:bg-slate-50 rounded-lg transition-colors border border-transparent hover:border-slate-200 cursor-pointer" onclick="toggleTask(this)">
+                            <div class="task-check mt-1 mr-4 w-5 h-5 rounded border-2 border-slate-300 flex items-center justify-center text-white font-bold text-xs transition-colors"></div>
+                            <div>
+                                <h4 class="font-bold text-slate-800">Hour 4: Hardening & Testing (Try it out!)</h4>
+                                <p class="text-sm text-slate-600">Add Try/Catch blocks, error logging, and central webhook integration. Deploy to a single DEV server. Intentionally stall a test job using `WAITFOR DELAY` to trigger the watchdog. Evaluate results.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-6">
+                    <div class="glass-panel p-6 bg-slate-800 text-white">
+                        <h3 class="text-lg font-bold mb-4 border-b border-slate-600 pb-2">Resource Needs</h3>
+                        <ul class="space-y-3 text-sm text-slate-300">
+                            <li class="flex justify-between items-center">
+                                <span>DBA helper (Query optimization)</span>
+                                <span class="bg-slate-600 px-2 py-1 rounded text-xs">Needed</span>
+                            </li>
+                            <li class="flex justify-between items-center">
+                                <span>PowerShell helper (Code review)</span>
+                                <span class="bg-slate-600 px-2 py-1 rounded text-xs">Needed</span>
+                            </li>
+                            <li class="flex justify-between items-center">
+                                <span>Test SQL Instance</span>
+                                <span class="bg-teal-600 px-2 py-1 rounded text-xs text-white">Secured</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="glass-panel p-6">
+                        <h3 class="text-lg font-bold text-slate-800 mb-2">Outputs</h3>
+                        <p class="text-sm text-slate-600 mb-4">Deliverables after the 4-hour sprint:</p>
+                        <ul class="space-y-2 text-sm text-slate-700 font-mono bg-slate-100 p-3 rounded">
+                            <li>📄 SqlWatchdogCore.psm1</li>
+                            <li>📄 Invoke-JobMonitor.ps1</li>
+                            <li>📄 config_template.json</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        // --- Navigation Logic ---
+        const navBtns = document.querySelectorAll('.nav-btn');
+        const sections = document.querySelectorAll('.content-section');
+
+        navBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                navBtns.forEach(b => b.classList.remove('active', 'text-teal-600', 'border-teal-600'));
+                sections.forEach(s => s.classList.add('hidden-section'));
+                
+                btn.classList.add('active', 'text-teal-600');
+                btn.style.borderBottomColor = '#0d9488';
+                
+                const targetId = btn.getAttribute('data-target');
+                document.getElementById(targetId).classList.remove('hidden-section');
+
+                if(targetId === 'section-engine') {
+                    renderChart();
+                }
+            });
+        });
+
+        // --- Edge Case Toggle Logic ---
+        function toggleSolution(id) {
+            const el = document.getElementById(id);
+            if (el.classList.contains('hidden')) {
+                el.classList.remove('hidden');
+                el.classList.add('fade-in');
+            } else {
+                el.classList.add('hidden');
+                el.classList.remove('fade-in');
+            }
+        }
+
+        // --- Checklist Logic ---
+        function toggleTask(element) {
+            const check = element.querySelector('.task-check');
+            if (check.innerHTML === '') {
+                check.innerHTML = '✓';
+                check.classList.remove('border-slate-300');
+                check.classList.add('bg-teal-500', 'border-teal-500');
+                element.classList.add('opacity-75');
+            } else {
+                check.innerHTML = '';
+                check.classList.add('border-slate-300');
+                check.classList.remove('bg-teal-500', 'border-teal-500');
+                element.classList.remove('opacity-75');
+            }
+        }
+
+        // --- Chart.js Statistical Logic ---
+        let chartInstance = null;
+        
+        const normalData = [30, 32, 28, 31, 29, 35, 27, 30, 31, 28, 33, 29, 30, 32];
+        const stuckData =  [30, 32, 28, 31, 29, 35, 27, 30, 31, 28, 33, 29, 30, 115]; // Anomaly on last run
+        
+        function calculateStats(dataArray) {
+            const n = dataArray.length;
+            const mean = dataArray.reduce((a,b) => a+b, 0) / n;
+            const variance = dataArray.reduce((a,b) => a + Math.pow(b - mean, 2), 0) / n;
+            const stdDev = Math.sqrt(variance);
+            return { mean, stdDev, threshold: mean + (2 * stdDev) };
+        }
+
+        function createChartConfig(dataArray, titleStr) {
+            const labels = dataArray.map((_, i) => `Run ${i+1}`);
+            const statsArray = dataArray.slice(0, -1); // Calculate stats based on historical, not current run
+            const stats = calculateStats(statsArray);
+            
+            const upperThresholdArr = Array(dataArray.length).fill(stats.threshold);
+            const meanArr = Array(dataArray.length).fill(stats.mean);
+            
+            const pointColors = dataArray.map(val => val > stats.threshold ? 'rgba(239, 68, 68, 1)' : 'rgba(13, 148, 136, 1)');
+            const pointRadii = dataArray.map(val => val > stats.threshold ? 8 : 4);
+
+            return {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Run Duration (Mins)',
+                            data: dataArray,
+                            borderColor: 'rgba(100, 116, 139, 0.4)',
+                            backgroundColor: pointColors,
+                            pointBackgroundColor: pointColors,
+                            pointRadius: pointRadii,
+                            pointHoverRadius: 10,
+                            type: 'line',
+                            borderWidth: 2,
+                            tension: 0.3,
+                            fill: false,
+                            order: 1
+                        },
+                        {
+                            label: 'Threshold (+2 StdDev)',
+                            data: upperThresholdArr,
+                            borderColor: 'rgba(245, 158, 11, 0.8)',
+                            borderDash: [5, 5],
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            fill: '+1',
+                            backgroundColor: 'rgba(20, 184, 166, 0.1)',
+                            order: 2
+                        },
+                        {
+                            label: 'Mean Duration',
+                            data: meanArr,
+                            borderColor: 'rgba(20, 184, 166, 0.8)',
+                            borderWidth: 1,
+                            pointRadius: 0,
+                            fill: false,
+                            order: 3
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'bottom' },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) { label += ': '; }
+                                    if (context.parsed.y !== null) {
+                                        label += context.parsed.y.toFixed(1) + ' mins';
+                                    }
+                                    if(context.datasetIndex === 0 && context.parsed.y > stats.threshold) {
+                                        label += ' ⚠️ RUNAWAY';
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Duration (Minutes)' },
+                            suggestedMax: 120
+                        },
+                        x: {
+                            title: { display: true, text: 'Job Execution Sequence' }
+                        }
+                    }
+                }
+            };
+        }
+
+        function renderChart(isStuck = false) {
+            const ctx = document.getElementById('statsChart').getContext('2d');
+            const dataToUse = isStuck ? stuckData : normalData;
+            
+            if(chartInstance) {
+                chartInstance.destroy();
+            }
+            
+            chartInstance = new Chart(ctx, createChartConfig(dataToUse));
+            
+            const insightDiv = document.getElementById('chart-insight');
+            if(isStuck) {
+                insightDiv.className = "mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-800 text-sm";
+                insightDiv.innerHTML = "<strong>Alert Triggered:</strong> Run 14 took 115 minutes, vastly exceeding the calculated upper threshold (~40 mins). The watchdog script would terminate this job or fire a critical alert.";
+            } else {
+                insightDiv.className = "mt-4 p-4 bg-slate-50 border border-slate-200 rounded-lg text-slate-700 text-sm";
+                insightDiv.innerHTML = "<strong>Insight:</strong> The historical data establishes an expected run duration band (Mean ± 2 StdDev). Current job executions falling within or near this band are considered healthy.";
+            }
+        }
+
+        document.getElementById('btn-simulate-normal').addEventListener('click', () => renderChart(false));
+        document.getElementById('btn-simulate-stuck').addEventListener('click', () => renderChart(true));
+
+        // Initial render logic
+        if(!document.getElementById('section-engine').classList.contains('hidden-section')){
+            renderChart(false);
+        }
+
+    </script>
+</body>
+</html>
