@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Targeted Validation for 4-node / 5-instance SQL Cluster (DGDSQL60C).
+    Targeted Validation for 4-node / 5-instance SQL Cluster (XXXXXXXXXXXX).
     Verifies storage delivery, MPIO status, and SCSI-3 reservations.
 #>
 
-$Nodes = "dgddbsw0335", "dgddbsw0336", "dgddbsw0337", "dgddbsw0338" # Ensure these match your 4 node names
+$Nodes = "XXXXXXXXXXX", "XXXXXXXXXXX", "XXXXXXXXXX", "XXXXXXXXXX" # Ensure these match your 4 node names
 $ReportPath = "C:\Temp\ClusterValidation_$(Get-Date -Format 'yyyyMMdd_HHmm').html"
 
 Write-Host "--- Starting Targeted Cluster Validation ---" -ForegroundColor Cyan
