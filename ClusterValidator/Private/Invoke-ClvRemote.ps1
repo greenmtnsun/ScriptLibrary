@@ -3,13 +3,21 @@ function Invoke-ClvRemote {
     # Two parameter sets:
     #   Single  - a single PSSession for per-node phases
     #   Many    - an array of PSSessions for parallel fan-out reads
+    #
+    # The -Session/-Sessions parameters are deliberately typed as [object]
+    # rather than [PSSession] so integration tests can mock this wrapper
+    # with stub session objects. Production type discipline still holds:
+    # the inner Invoke-Command -Session call requires a real PSSession,
+    # which is what gets passed at runtime.
     [CmdletBinding(DefaultParameterSetName = 'Single')]
     param(
         [Parameter(Mandatory, ParameterSetName = 'Single')]
-        [System.Management.Automation.Runspaces.PSSession]$Session,
+        [ValidateNotNull()]
+        $Session,
 
         [Parameter(Mandatory, ParameterSetName = 'Many')]
-        [System.Management.Automation.Runspaces.PSSession[]]$Sessions,
+        [ValidateNotNullOrEmpty()]
+        [object[]]$Sessions,
 
         [Parameter(Mandatory)] [scriptblock]$ScriptBlock,
 

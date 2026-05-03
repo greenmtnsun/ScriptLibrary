@@ -1,6 +1,6 @@
 @{
     RootModule        = 'ClusterValidator.psm1'
-    ModuleVersion     = '1.3.0'
+    ModuleVersion     = '1.4.0'
     GUID              = 'b836e54f-ed7b-48a0-b3ce-fa369678f13d'
     Author            = 'ScriptLibrary maintainers'
     CompanyName       = 'GreenMtnSun'
@@ -26,7 +26,7 @@
         PSData = @{
             Tags         = @('Cluster', 'Validation', 'SQL', 'FCI', 'SAN', 'SCSI3', 'MPIO')
             ProjectUri   = 'https://github.com/greenmtnsun/scriptlibrary'
-            ReleaseNotes = '1.3.0 - New public function Test-ClusterValidatorConfig statically validates a Config\*.json against the Invoke-ClusterValidator parameter schema. Catches typos, unknown keys, type mismatches, ValidateSet violations, ValidateRange overruns, and protected-key writes (Nodes/Credential/ConfigPath) before they hit production. Public surface expanded from one to two exports.'
+            ReleaseNotes = '1.4.0 - Pester integration suite. Drives Invoke-ClusterValidator end-to-end with every external cmdlet mocked: per-phase Pass and Fail simulations for Storage, Quorum, Heartbeat, Time, Reboot, Hotfix, ServiceAccount, VMware, TestCluster, Forensic, plus a happy-path test asserting all 14 phases produce records and a single correlation GUID stamps the whole run. Closes the Phase 4 acceptance-criteria gap.'
         }
     }
 }

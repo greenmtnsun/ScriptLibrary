@@ -4,6 +4,58 @@ All notable changes to the **ClusterValidator** module are documented
 here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.4.0] — 2026-05-03
+
+### Added
+
+- **Pester integration suite** under `Tests/Integration/`. Drives
+  `Invoke-ClusterValidator` end-to-end against mocks; no live
+  cluster, vCenter, MPIO stack, or admin token required. Closes the
+  Phase 4 roadmap acceptance-criteria gap.
+- Per-phase Pass and Fail coverage for Storage (count mismatch +
+  serial divergence), Quorum (witness offline + type mismatch),
+  Heartbeat (below-default thresholds), Time (skew exceeds tolerance),
+  Reboot (pending), Hotfix (drift), ServiceAccount (built-in account),
+  VMware (skipped without `-VCenterServer`), TestCluster (failure),
+  and Forensic (skipped on clean run, fired on any Fail).
+- Happy-path test asserting every one of the 14 phases produces at
+  least one record and that a single correlation GUID stamps the
+  whole run.
+- PreFlight abort test asserting WSMan unreachability on every node
+  throws with the expected diagnostic.
+- New private helper `Test-ClvElevation.ps1` extracted from the
+  inline admin check so tests can mock `Mock Test-ClvElevation
+  { $true }` without needing an elevated runner.
+- Mock discrimination via `-ParameterFilter` matching against
+  `$ScriptBlock.ToString()` content — each per-phase
+  `Invoke-ClvRemote` call is intercepted by the unique cmdlet name
+  in its scriptblock (`Get-Disk`, `Get-ClusterQuorum`, `Get-HotFix`,
+  etc.).
+
+### Changed
+
+- `Invoke-ClvRemote -Session` and `-Sessions` parameter types relaxed
+  from `[PSSession]` / `[PSSession[]]` to `[object]` /
+  `[object[]]` (with `[ValidateNotNull()]` /
+  `[ValidateNotNullOrEmpty()]`). Production type discipline is
+  preserved by the inner `Invoke-Command -Session` call, which
+  still requires a real `PSSession`. Necessary because mocked
+  sessions cannot inherit from `PSSession` (no public constructor).
+- `Get-ClvClusterResource -Session` parameter type relaxed for the
+  same reason.
+- `Remove-PSSession` cleanup in the orchestrator's `finally` block
+  now wrapped in `try/catch`. `-ErrorAction SilentlyContinue` does
+  not catch `ParameterBindingException`; this hardens the cleanup
+  path against both real-world remoting flakes and test stubs.
+- `Tools/Invoke-ClvPester.ps1` already supported `-Category
+  Integration`; no script change required, the new test files
+  light up automatically.
+
+### Tests
+
+- `Tests/Integration/Invoke-ClusterValidator.Integration.Tests.ps1`
+  — 17 cases across 11 contexts.
+
 ## [1.3.0] — 2026-05-03
 
 ### Added

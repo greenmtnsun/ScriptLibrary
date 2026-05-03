@@ -106,11 +106,10 @@ function Invoke-ClusterValidator {
     # -----------------------------------------------------------------------
     # Runtime admin check (#Requires -RunAsAdministrator only fires when
     # this file is executed as a script; here it's dot-sourced by the
-    # module loader, so we enforce it ourselves).
+    # module loader, so we enforce it ourselves via Test-ClvElevation -
+    # which is its own private helper so integration tests can mock it).
     # -----------------------------------------------------------------------
-    $principal = [System.Security.Principal.WindowsPrincipal]::new(
-                     [System.Security.Principal.WindowsIdentity]::GetCurrent())
-    if (-not $principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    if (-not (Test-ClvElevation)) {
         throw 'ConfigurationError: Invoke-ClusterValidator requires elevated (Administrator) execution context.'
     }
 
@@ -701,8 +700,14 @@ function Invoke-ClusterValidator {
         }
     }
     finally {
+        # Defensive cleanup: a failed Remove-PSSession (network blip,
+        # session-already-closed, parameter-binding mismatch under test
+        # mocks) must not mask the actual run result. ErrorAction alone
+        # doesn't cover ParameterBindingException, so try/catch as well.
         foreach ($s in $script:nodeSessions.Values) {
-            if ($s) { Remove-PSSession -Session $s -ErrorAction SilentlyContinue }
+            if ($s) {
+                try { Remove-PSSession -Session $s -ErrorAction SilentlyContinue } catch { }
+            }
         }
         if ($transcriptStarted) {
             Stop-Transcript -ErrorAction SilentlyContinue | Out-Null
