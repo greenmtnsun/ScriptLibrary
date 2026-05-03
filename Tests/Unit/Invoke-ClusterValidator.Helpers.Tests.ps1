@@ -168,6 +168,65 @@ Describe 'ClusterValidator helpers - Unit' {
     }
 }
 
+Describe 'Get-ClvHostColocation (1.2.0)' {
+
+    It 'reports IsHealthy when every VM is on a distinct host' {
+        InModuleScope ClusterValidator {
+            $vms = @(
+                [pscustomobject]@{ Name='sql01'; VMHost=[pscustomobject]@{Name='esx-a'} },
+                [pscustomobject]@{ Name='sql02'; VMHost=[pscustomobject]@{Name='esx-b'} },
+                [pscustomobject]@{ Name='sql03'; VMHost=[pscustomobject]@{Name='esx-c'} },
+                [pscustomobject]@{ Name='sql04'; VMHost=[pscustomobject]@{Name='esx-d'} }
+            )
+            $r = Get-ClvHostColocation -VMs $vms
+            $r.IsHealthy        | Should -BeTrue
+            @($r.Colocated).Count | Should -Be 0
+            $r.HostMap.Count    | Should -Be 4
+        }
+    }
+
+    It 'flags the host(s) that hold more than one VM' {
+        InModuleScope ClusterValidator {
+            $vms = @(
+                [pscustomobject]@{ Name='sql01'; VMHost=[pscustomobject]@{Name='esx-a'} },
+                [pscustomobject]@{ Name='sql02'; VMHost=[pscustomobject]@{Name='esx-a'} },  # colocated
+                [pscustomobject]@{ Name='sql03'; VMHost=[pscustomobject]@{Name='esx-b'} },
+                [pscustomobject]@{ Name='sql04'; VMHost=[pscustomobject]@{Name='esx-c'} }
+            )
+            $r = Get-ClvHostColocation -VMs $vms
+            $r.IsHealthy            | Should -BeFalse
+            @($r.Colocated).Count   | Should -Be 1
+            $r.Colocated[0].Host    | Should -Be 'esx-a'
+            @($r.Colocated[0].VMs)  | Should -Be @('sql01','sql02')
+        }
+    }
+
+    It 'flags multiple colocated host pairs independently' {
+        InModuleScope ClusterValidator {
+            $vms = @(
+                [pscustomobject]@{ Name='sql01'; VMHost=[pscustomobject]@{Name='esx-a'} },
+                [pscustomobject]@{ Name='sql02'; VMHost=[pscustomobject]@{Name='esx-a'} },
+                [pscustomobject]@{ Name='sql03'; VMHost=[pscustomobject]@{Name='esx-b'} },
+                [pscustomobject]@{ Name='sql04'; VMHost=[pscustomobject]@{Name='esx-b'} }
+            )
+            $r = Get-ClvHostColocation -VMs $vms
+            $r.IsHealthy          | Should -BeFalse
+            @($r.Colocated).Count | Should -Be 2
+        }
+    }
+
+    It 'handles a degenerate single-VM input cleanly' {
+        InModuleScope ClusterValidator {
+            $vms = @(
+                [pscustomobject]@{ Name='sql01'; VMHost=[pscustomobject]@{Name='esx-a'} }
+            )
+            $r = Get-ClvHostColocation -VMs $vms
+            $r.IsHealthy        | Should -BeTrue
+            $r.HostMap.Count    | Should -Be 1
+        }
+    }
+}
+
 Describe 'Add-ClvResult - Category enforcement (Rules §7, 1.1.0)' {
 
     BeforeEach {

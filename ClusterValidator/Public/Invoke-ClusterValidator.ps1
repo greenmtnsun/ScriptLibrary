@@ -83,6 +83,14 @@ function Invoke-ClusterValidator {
 
         [switch]$HardenReportAcl,
 
+        # Phase 11 VMware anti-affinity check (optional). When omitted,
+        # the phase logs an Info record and skips. PowerCLI must be
+        # installed; module is loaded lazily so a missing module is also
+        # a clean skip rather than a hard import failure.
+        [string]$VCenterServer,
+
+        [string]$VCenterCredentialSecretName,
+
         [ValidateScript({ Test-Path -Path $_ -PathType Leaf })]
         [string]$ConfigPath,
 
@@ -522,7 +530,109 @@ function Invoke-ClusterValidator {
         }
 
         # -------------------------------------------------------------------
-        # Phase 11: TestCluster - Microsoft validation suite
+        # Phase 11: VMware - DRS anti-affinity check (optional)
+        # -------------------------------------------------------------------
+        # Three skip cases, all logged as Info: PowerCLI missing,
+        # -VCenterServer not given, or vCenter unreachable. None of them
+        # fails the run. The phase fires Fail/Warn only when we
+        # successfully connected and discovered a real anti-affinity
+        # violation.
+        if (-not $VCenterServer) {
+            Add-ClvResult -Phase 'VMware' -Status 'Info' `
+                -Message '-VCenterServer not provided; VMware anti-affinity check skipped.'
+        } elseif (-not (Get-Module -ListAvailable -Name 'VMware.VimAutomation.Core')) {
+            Add-ClvResult -Phase 'VMware' -Status 'Info' `
+                -Message 'VMware.VimAutomation.Core (PowerCLI) not installed; VMware anti-affinity check skipped.'
+        } else {
+            $vcCred = $null
+            if ($VCenterCredentialSecretName) {
+                if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretManagement)) {
+                    Add-ClvResult -Phase 'VMware' -Status 'Warn' -Category 'ConfigurationError' `
+                        -Message "-VCenterCredentialSecretName specified but Microsoft.PowerShell.SecretManagement is not installed."
+                } else {
+                    try {
+                        $vcCred = Get-Secret -Name $VCenterCredentialSecretName -ErrorAction Stop
+                    } catch {
+                        Add-ClvResult -Phase 'VMware' -Status 'Warn' -Category 'ConfigurationError' `
+                            -Message "Failed to resolve secret '$VCenterCredentialSecretName': $($_.Exception.Message)"
+                    }
+                }
+            }
+
+            $viConn = $null
+            try {
+                Import-Module VMware.VimAutomation.Core -ErrorAction Stop
+
+                $connectParams = @{
+                    Server      = $VCenterServer
+                    ErrorAction = 'Stop'
+                }
+                if ($vcCred) { $connectParams.Credential = $vcCred }
+                $viConn = Connect-VIServer @connectParams
+
+                # Match by short name; nodes are passed as short names but
+                # vCenter VMs may carry FQDN or display-name conventions.
+                # Best-effort: try short, then like-pattern.
+                $vms = foreach ($node in $sessionNodes) {
+                    $vm = Get-VM -Name $node -ErrorAction SilentlyContinue
+                    if (-not $vm) {
+                        $vm = Get-VM -Name "$node*" -ErrorAction SilentlyContinue | Select-Object -First 1
+                    }
+                    if ($vm) { $vm }
+                }
+
+                if (@($vms).Count -lt $sessionNodes.Count) {
+                    $missing = @($sessionNodes | Where-Object { $_ -notin @($vms.Name) })
+                    Add-ClvResult -Phase 'VMware' -Status 'Warn' -Category 'ConfigurationError' `
+                        -Message "Could not locate every node in vCenter (missing: $($missing -join ', ')). Anti-affinity check incomplete." `
+                        -Data @{ Found = @($vms.Name); Missing = $missing }
+                } else {
+                    $colo = Get-ClvHostColocation -VMs $vms
+                    if ($colo.IsHealthy) {
+                        Add-ClvResult -Phase 'VMware' -Status 'Pass' `
+                            -Message "All $($vms.Count) FCI VMs are on distinct ESXi hosts." `
+                            -Data $colo.HostMap
+                    } else {
+                        Add-ClvResult -Phase 'VMware' -Status 'Fail' -Category 'AffinityViolation' `
+                            -Message "$(@($colo.Colocated).Count) ESXi host(s) hold multiple FCI VMs; a single host failure can take down the cluster." `
+                            -Data $colo.Colocated
+                    }
+
+                    # DRS rule presence check. Cluster (the vCenter cluster) is the
+                    # parent of the first VMHost. Rule may exist with subset; we
+                    # only check that *some* enabled VMAntiAffinity rule mentions
+                    # at least two of our VMs.
+                    try {
+                        $vCluster = $vms[0].VMHost.Parent
+                        $rules = Get-DrsRule -Cluster $vCluster -Type VMAntiAffinity -ErrorAction Stop
+                        $vmIds = $vms.Id
+                        $covering = $rules | Where-Object {
+                            $_.Enabled -and (@($_.VMIds | Where-Object { $_ -in $vmIds }).Count -ge 2)
+                        }
+                        if ($covering) {
+                            Add-ClvResult -Phase 'VMware' -Status 'Pass' `
+                                -Message "DRS anti-affinity rule(s) cover these VMs: $(@($covering.Name) -join ', ')."
+                        } else {
+                            Add-ClvResult -Phase 'VMware' -Status 'Warn' -Category 'AffinityViolation' `
+                                -Message "No enabled DRS VMAntiAffinity rule covers these FCI VMs; vMotion may colocate them later."
+                        }
+                    } catch {
+                        Add-ClvResult -Phase 'VMware' -Status 'Warn' -Category 'ConnectionError' `
+                            -Message "DRS rule interrogation failed: $($_.Exception.Message)"
+                    }
+                }
+            } catch {
+                Add-ClvResult -Phase 'VMware' -Status 'Warn' -Category 'ConnectionError' `
+                    -Message "VMware interrogation failed: $($_.Exception.Message)"
+            } finally {
+                if ($viConn) {
+                    Disconnect-VIServer -Server $viConn -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+                }
+            }
+        }
+
+        # -------------------------------------------------------------------
+        # Phase 12: TestCluster - Microsoft validation suite
         # -------------------------------------------------------------------
         Write-Host ''
         Write-Host 'Running Test-Cluster (this may take several minutes for 32 disks)...' -ForegroundColor Cyan
@@ -541,7 +651,7 @@ function Invoke-ClusterValidator {
         }
 
         # -------------------------------------------------------------------
-        # Phase 12: Forensic - Get-ClusterLog capture, only on Fail
+        # Phase 13: Forensic - Get-ClusterLog capture, only on Fail
         # -------------------------------------------------------------------
         if ($script:results.Status -contains 'Fail') {
             try {
@@ -558,7 +668,7 @@ function Invoke-ClusterValidator {
         }
 
         # -------------------------------------------------------------------
-        # Phase 13: Persist - JSON + summary + Event Log
+        # Phase 14: Persist - JSON + summary + Event Log
         # -------------------------------------------------------------------
         $script:results | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonReport -Encoding UTF8
 

@@ -78,9 +78,10 @@ phase-complete log line.
 8. Reboot — pending-reboot detection on every node
 9. Hotfix — KB parity across nodes
 10. ServiceAccount — Cluster + SQL service account hygiene
-11. TestCluster — Microsoft `Test-Cluster`
-12. Forensic — `Get-ClusterLog` capture, triggered only on Fail
-13. Persist — JSON + HTML + transcript + Event Log
+11. VMware — DRS anti-affinity (optional; gated on PowerCLI + `-VCenterServer`)
+12. TestCluster — Microsoft `Test-Cluster`
+13. Forensic — `Get-ClusterLog` capture, triggered only on Fail
+14. Persist — JSON + HTML + transcript + Event Log
 
 Reordering or removing a phase requires a roadmap amendment and a
 matching static test update.
@@ -137,6 +138,7 @@ statuses and ad-hoc severity strings are rejected.
 - `HotfixParityError` — KB level diverges across nodes
 - `PendingRebootDetected` — any node reports reboot pending
 - `ServiceAccountError` — `LocalSystem` or mismatched FCI account
+- `AffinityViolation` — VMware DRS anti-affinity violation (FCI VMs colocated on one ESXi host, or no enabled DRS rule)
 - `TestClusterFailure` — Microsoft `Test-Cluster` reported a failure
 - `ConfigurationError` — bad parameter or missing config key
 - `HandledSkip` — gating logic intentionally bypassed a phase

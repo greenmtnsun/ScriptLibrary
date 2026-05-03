@@ -4,6 +4,65 @@ All notable changes to the **ClusterValidator** module are documented
 here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.2.0] — 2026-05-03
+
+### Added
+
+- **Phase 11 VMware** — DRS anti-affinity check. Three-way gate:
+  skipped if `-VCenterServer` not supplied, skipped if PowerCLI
+  (`VMware.VimAutomation.Core`) is not installed, otherwise runs.
+- Two new parameters: `-VCenterServer` (vCenter FQDN/IP) and
+  `-VCenterCredentialSecretName` (resolved via SecretManagement).
+  When the secret name is omitted, ambient SSO is used.
+- `Connect-VIServer` / `Disconnect-VIServer` lifecycle wrapped in
+  try/finally so a vCenter connection is always closed cleanly.
+- VM-to-host topology check: emits `Pass` when every FCI VM lives on
+  a distinct ESXi host; emits `Fail` with `AffinityViolation` when
+  two or more share a host (single-host failure would take down the
+  cluster).
+- DRS rule presence check: `Get-DrsRule -Type VMAntiAffinity` on the
+  parent vCenter cluster. `Pass` when an enabled rule covers ≥2 of
+  our VMs; `Warn` with `AffinityViolation` when no covering rule
+  exists (vMotion may colocate VMs later even if they're separate
+  right now).
+- New private helper `Get-ClvHostColocation.ps1` — pure logic that
+  takes an array of VM objects and returns an `IsHealthy`/`Colocated`
+  report. Unit-tested with synthetic VMs (no PowerCLI required).
+- New §7 category: `AffinityViolation`. Domain-failure category for
+  VMware/Hyper-V/Azure availability-set violations.
+
+### Changed
+
+- Phase contract grows to 14 phases. Renumbering: TestCluster
+  11 → 12, Forensic 12 → 13, Persist 13 → 14. New Phase 11 VMware
+  slots between ServiceAccount (10) and TestCluster (12).
+- Rules §4 phase contract updated to list 14 phases.
+- Rules §7 category vocabulary updated to include `AffinityViolation`.
+
+### Tests
+
+- Static suite: 14-phase marker order check; new context for Phase 11
+  asserting `-VCenterServer` parameter, PowerCLI gate via
+  `Get-Module -ListAvailable`, `Connect-VIServer` + matching
+  `Disconnect-VIServer` in a finally block, `Get-DrsRule` invocation,
+  `Get-ClvHostColocation` usage, and presence of the private file.
+- Static suite: `AffinityViolation` added to the domain-category
+  source-presence check.
+- Unit suite: `Get-ClvHostColocation` covered with healthy,
+  single-collision, multi-collision, and degenerate-input cases. No
+  PowerCLI required.
+
+### Notes
+
+- PowerCLI is a runtime soft-dependency: not in `RequiredModules`
+  (would break installs on hosts that never need vSphere checks).
+  The orchestrator probes for it lazily and emits an `Info` record
+  when missing.
+- The match between PowerShell node names and vCenter VM names is
+  best-effort (exact short-name first, then `<short>*` like-pattern).
+  When a node can't be located, the phase emits `Warn` with
+  `ConfigurationError` listing exactly which nodes are missing.
+
 ## [1.1.0] — 2026-05-03
 
 ### Added
@@ -122,13 +181,12 @@ shape.
 - Code signing requires the internal PKI cert; the published build is
   unsigned for now. AllSigned hosts must trust the publisher chain
   before adopting.
-- VMware anti-affinity / DRS check (roadmap Phase 4 optional) is not
-  implemented.
 - GitHub Actions workflow assumes `windows-latest` runners can install
   the `Failover-Clustering` Windows feature; in restricted environments
   the unit suite may need to skip module-import tests.
 
-> Note: the 1.0.0 result-category gap is closed in 1.1.0 (see above).
+> Note: the 1.0.0 result-category gap is closed in 1.1.0; the 1.0.0
+> VMware/DRS gap is closed in 1.2.0.
 
 ### Notes
 

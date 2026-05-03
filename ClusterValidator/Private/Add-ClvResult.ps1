@@ -31,6 +31,7 @@ function Add-ClvResult {
             'HotfixParityError',
             'PendingRebootDetected',
             'ServiceAccountError',
+            'AffinityViolation',
             'TestClusterFailure',
             'ConfigurationError',
             'HandledSkip',

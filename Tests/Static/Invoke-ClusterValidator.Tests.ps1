@@ -73,7 +73,7 @@ Describe 'ClusterValidator module - Static' {
     }
 
     Context 'Rules §4 - orchestrator phase contract' {
-        It 'public function declares all 13 phase markers in order' {
+        It 'public function declares all 14 phase markers in order' {
             $expected = @(
                 '# Phase 1: PreFlight',
                 '# Phase 2: MPIO',
@@ -85,9 +85,10 @@ Describe 'ClusterValidator module - Static' {
                 '# Phase 8: Reboot',
                 '# Phase 9: Hotfix',
                 '# Phase 10: ServiceAccount',
-                '# Phase 11: TestCluster',
-                '# Phase 12: Forensic',
-                '# Phase 13: Persist'
+                '# Phase 11: VMware',
+                '# Phase 12: TestCluster',
+                '# Phase 13: Forensic',
+                '# Phase 14: Persist'
             )
             $previous = -1
             foreach ($marker in $expected) {
@@ -279,6 +280,7 @@ Describe 'ClusterValidator module - Static' {
                 'PendingRebootDetected',
                 'HotfixParityError',
                 'ServiceAccountError',
+                'AffinityViolation',
                 'TestClusterFailure'
             )
             foreach ($cat in $domain) {
@@ -313,6 +315,35 @@ Describe 'ClusterValidator module - Static' {
                 }
             }
             $offenders | Should -BeNullOrEmpty -Because 'Rules §7: Fail and Warn require -Category'
+        }
+    }
+
+    Context 'Phase 11 VMware (1.2.0)' {
+        It 'exposes -VCenterServer and -VCenterCredentialSecretName' {
+            $paramNames = $script:FunctionAst.Body.ParamBlock.Parameters.Name.VariablePath.UserPath
+            $paramNames | Should -Contain 'VCenterServer'
+            $paramNames | Should -Contain 'VCenterCredentialSecretName'
+        }
+        It 'gates the phase on PowerCLI being installed' {
+            $script:OrchestratorText | Should -Match "Get-Module\s+-ListAvailable\s+-Name\s+'VMware\.VimAutomation\.Core'"
+        }
+        It 'connects via Connect-VIServer and disconnects in finally' {
+            $script:OrchestratorText | Should -Match '(?<![-\w])Connect-VIServer(?![-\w])'
+            $script:OrchestratorText | Should -Match '(?<![-\w])Disconnect-VIServer(?![-\w])'
+            # The Disconnect must live in the finally block of the VMware phase.
+            $finallyIdx     = $script:OrchestratorText.IndexOf('finally {', $script:OrchestratorText.IndexOf('# Phase 11: VMware'))
+            $disconnectIdx  = $script:OrchestratorText.IndexOf('Disconnect-VIServer')
+            $disconnectIdx  | Should -BeGreaterThan $finallyIdx
+        }
+        It 'queries DRS rules via Get-DrsRule' {
+            $script:OrchestratorText | Should -Match '(?<![-\w])Get-DrsRule(?![-\w])'
+        }
+        It 'uses the Get-ClvHostColocation pure helper' {
+            $script:OrchestratorText | Should -Match 'Get-ClvHostColocation\s+-VMs'
+        }
+        It 'Get-ClvHostColocation private file exists' {
+            $path = Join-Path $script:ModuleRoot 'Private\Get-ClvHostColocation.ps1'
+            Test-Path -Path $path -PathType Leaf | Should -BeTrue
         }
     }
 
