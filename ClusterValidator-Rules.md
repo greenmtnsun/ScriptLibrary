@@ -166,3 +166,28 @@ as the matching test change. The progression is:
 4. Update `ClusterValidator-Roadmap.md` if a phase's scope changes.
 
 Small, verifiable steps over large unbounded changes.
+
+---
+
+## 10. Module Evolution Trigger
+
+The validator stays a single signed script as long as that shape carries
+the risk. Promote it to a PowerShell module (`.psd1` + `.psm1` +
+`Public/` + `Private/`) when **any** of these signals fire:
+
+- The orchestrator exceeds ~800 lines or 12 distinct phases.
+- A second script in this repo wants to reuse the same helpers
+  (wrappers, classifier, artifact writer).
+- An external consumer needs to import individual functions rather than
+  invoke the script.
+- A signed-package distribution channel (PSGallery, internal feed) is
+  adopted — modules carry the version metadata and dependency manifest
+  that signed scripts cannot.
+- Constrained Language Mode allowlisting is required and the policy is
+  authored at module identity, not script path.
+
+When the trigger fires, this document grows three rules — public
+function contract (exported names + aliases), manifest discipline
+(`RequiredModules`, `FunctionsToExport`, semver), and a loader test —
+and §4's phase contract is reframed around the exported orchestrator
+function. Until then, no speculative module scaffolding.
