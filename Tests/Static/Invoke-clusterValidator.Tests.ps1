@@ -1,0 +1,153 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)]
+    [string]$ProjectRoot
+)
+
+# Static test suite for Invoke-clusterValidator.ps1.
+# Enforces ClusterValidator-Rules.md §2-§7 against the source on disk
+# without requiring a live cluster, dbatools, or any remote endpoint.
+
+Describe 'Invoke-clusterValidator.ps1 - Static' {
+
+    BeforeAll {
+        $script:OrchestratorPath = Join-Path $ProjectRoot 'Invoke-clusterValidator.ps1'
+        $script:OrchestratorText = Get-Content -Path $script:OrchestratorPath -Raw
+
+        $tokens = $null
+        $errors = $null
+        $script:Ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            $script:OrchestratorPath, [ref]$tokens, [ref]$errors)
+        $script:ParseErrors = $errors
+    }
+
+    It 'orchestrator file exists' {
+        Test-Path -Path $script:OrchestratorPath -PathType Leaf | Should -BeTrue
+    }
+
+    It 'parses without errors' {
+        $script:ParseErrors | Should -BeNullOrEmpty
+    }
+
+    It 'declares the required #Requires statements' {
+        $script:OrchestratorText | Should -Match '#Requires\s+-Version\s+5\.1'
+        $script:OrchestratorText | Should -Match '#Requires\s+-RunAsAdministrator'
+        $script:OrchestratorText | Should -Match '#Requires\s+-Modules\s+FailoverClusters'
+    }
+
+    It 'uses [CmdletBinding()]' {
+        $script:OrchestratorText | Should -Match '\[CmdletBinding\(\)\]'
+    }
+
+    It 'declares Nodes as a mandatory parameter' {
+        $nodesParam = $script:Ast.ParamBlock.Parameters |
+            Where-Object { $_.Name.VariablePath.UserPath -eq 'Nodes' }
+        $nodesParam | Should -Not -BeNullOrEmpty
+
+        $mandatoryArg = $nodesParam.Attributes |
+            Where-Object { $_.TypeName.Name -eq 'Parameter' } |
+            ForEach-Object { $_.NamedArguments } |
+            Where-Object { $_.ArgumentName -eq 'Mandatory' }
+        $mandatoryArg | Should -Not -BeNullOrEmpty
+    }
+
+    Context 'Rules §2 - no $PSScriptRoot anywhere in the project' {
+        It 'contains no $PSScriptRoot variable reference in any .ps1 in the tree' {
+            # AST-based scan: only flags real variable references, not regex
+            # literals or comments (where the token is legitimately mentioned).
+            $offenders = Get-ChildItem -Path $ProjectRoot -Filter '*.ps1' -Recurse -File | ForEach-Object {
+                $t = $null; $e = $null
+                $fileAst = [System.Management.Automation.Language.Parser]::ParseFile(
+                    $_.FullName, [ref]$t, [ref]$e)
+                $hit = $fileAst.FindAll({
+                    param($n)
+                    $n -is [System.Management.Automation.Language.VariableExpressionAst] -and
+                    $n.VariablePath.UserPath -eq 'PSScriptRoot'
+                }, $true)
+                if ($hit) { $_.FullName }
+            }
+            $offenders | Should -BeNullOrEmpty -Because 'ClusterValidator-Rules.md §2 forbids $PSScriptRoot'
+        }
+    }
+
+    Context 'Rules §4 - orchestrator phase contract (in order)' {
+        It 'declares phase markers in monotonically increasing order' {
+            $expected = @(
+                '# Phase 1: PreFlight',
+                '# Phase 2: MPIO',
+                '# Phase 3: Storage',
+                '# Phase 4: SCSI3',
+                '# Phase 11: TestCluster',
+                '# Phase 12: Persist'
+            )
+            $previous = -1
+            foreach ($marker in $expected) {
+                $idx = $script:OrchestratorText.IndexOf($marker)
+                $idx | Should -BeGreaterThan $previous -Because "phase marker '$marker' must be present and follow the previous one"
+                $previous = $idx
+            }
+        }
+    }
+
+    Context 'Rules §5 - external-cmdlet wrappers exist' {
+        It 'defines Invoke-ClvRemote' {
+            $script:OrchestratorText | Should -Match 'function\s+Invoke-ClvRemote\b'
+        }
+        It 'defines Invoke-ClvTestCluster' {
+            $script:OrchestratorText | Should -Match 'function\s+Invoke-ClvTestCluster\b'
+        }
+        It 'defines Get-ClvClusterResource' {
+            $script:OrchestratorText | Should -Match 'function\s+Get-ClvClusterResource\b'
+        }
+        It 'invokes Test-Cluster only via the wrapper' {
+            $direct = Select-String -Path $script:OrchestratorPath -Pattern '(?<![-\w])Test-Cluster(?![-\w])' |
+                Where-Object { $_.Line -notmatch '(function|Invoke-ClvTestCluster)' }
+            $direct | Should -BeNullOrEmpty -Because 'Test-Cluster is wrapped per Rules §5'
+        }
+    }
+
+    Context 'Rules §6 - read-only discipline (no cluster-mutating cmdlets)' {
+        $forbidden = @(
+            'Move-ClusterGroup',
+            'Move-ClusterSharedVolume',
+            'Start-ClusterResource',
+            'Stop-ClusterResource',
+            'Set-ClusterParameter',
+            'Set-ClusterQuorum',
+            'Clear-ClusterDiskReservation'
+        )
+        foreach ($cmd in $forbidden) {
+            It "does not invoke forbidden cmdlet: $cmd" {
+                $pattern = "(?<![-\w])$([regex]::Escape($cmd))(?![-\w])"
+                $script:OrchestratorText | Should -Not -Match $pattern
+            }
+        }
+    }
+
+    Context 'Roadmap Phase 1 - Audit & Observability' {
+        It 'generates a correlation GUID' {
+            $script:OrchestratorText | Should -Match '\[guid\]::NewGuid\(\)'
+        }
+        It 'starts a transcript' {
+            $script:OrchestratorText | Should -Match 'Start-Transcript'
+        }
+        It 'stops the transcript inside a finally block' {
+            $script:OrchestratorText | Should -Match 'Stop-Transcript'
+            $script:OrchestratorText | Should -Match 'finally\s*\{'
+        }
+        It 'uses Test-WSMan for reachability instead of Test-Connection' {
+            $script:OrchestratorText | Should -Match '(?<![-\w])Test-WSMan(?![-\w])'
+            $script:OrchestratorText | Should -Not -Match '(?<![-\w])Test-Connection(?![-\w])'
+        }
+        It 'opens reusable PSSessions with explicit timeouts' {
+            $script:OrchestratorText | Should -Match 'New-PSSession\b'
+            $script:OrchestratorText | Should -Match 'New-PSSessionOption\b'
+            $script:OrchestratorText | Should -Match '-OperationTimeout'
+            $script:OrchestratorText | Should -Match '-OpenTimeout'
+            $script:OrchestratorText | Should -Match 'Remove-PSSession\b'
+        }
+        It 'stamps every result record with the correlation GUID' {
+            $script:OrchestratorText | Should -Match 'CorrelationId\s*=\s*\$correlationId'
+        }
+    }
+}
