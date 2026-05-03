@@ -162,6 +162,45 @@ Describe 'Invoke-clusterValidator.ps1 - Static' {
         }
     }
 
+    Context 'Roadmap Phase 3 - Security Hardening' {
+        It 'exposes -Credential, -CredentialSecretName, -HardenReportAcl' {
+            $paramNames = $script:Ast.ParamBlock.Parameters.Name.VariablePath.UserPath
+            $paramNames | Should -Contain 'Credential'
+            $paramNames | Should -Contain 'CredentialSecretName'
+            $paramNames | Should -Contain 'HardenReportAcl'
+        }
+        It 'enforces FullLanguage mode preflight before transcript opens' {
+            $script:OrchestratorText | Should -Match 'LanguageMode\s+-ne\s+''FullLanguage'''
+            $clmIdx       = $script:OrchestratorText.IndexOf('LanguageMode')
+            $transcriptIdx = $script:OrchestratorText.IndexOf('Start-Transcript')
+            $clmIdx | Should -BeLessThan $transcriptIdx -Because 'CLM preflight must run before Start-Transcript'
+        }
+        It 'resolves credentials via Microsoft.PowerShell.SecretManagement' {
+            $script:OrchestratorText | Should -Match 'Microsoft\.PowerShell\.SecretManagement'
+            $script:OrchestratorText | Should -Match '(?<![-\w])Get-Secret(?![-\w])'
+        }
+        It 'passes the resolved credential to New-PSSession' {
+            $script:OrchestratorText | Should -Match 'sessionParams\.Credential\s*=\s*\$Credential'
+        }
+        It 'hardens the report directory DACL on demand' {
+            $script:OrchestratorText | Should -Match 'SetAccessRuleProtection'
+            $script:OrchestratorText | Should -Match 'NT AUTHORITY\\SYSTEM'
+            $script:OrchestratorText | Should -Match 'BUILTIN\\Administrators'
+            # Hardening must run before transcript so the file inherits the DACL.
+            $aclIdx        = $script:OrchestratorText.IndexOf('SetAccessRuleProtection')
+            $transcriptIdx = $script:OrchestratorText.IndexOf('Start-Transcript')
+            $aclIdx | Should -BeLessThan $transcriptIdx
+        }
+        It 'documents AllSigned and gMSA expectations in .NOTES' {
+            $script:OrchestratorText | Should -Match 'AllSigned'
+            $script:OrchestratorText | Should -Match '(gMSA|Group Managed Service Account)'
+        }
+        It 'contains no hardcoded plaintext credentials' {
+            $script:OrchestratorText | Should -Not -Match 'ConvertTo-SecureString[^|]+-AsPlainText'
+            $script:OrchestratorText | Should -Not -Match '\$pass(word)?\s*=\s*[''"][^''"]+[''"]'
+        }
+    }
+
     Context 'Roadmap Phase 1 - Audit & Observability' {
         It 'generates a correlation GUID' {
             $script:OrchestratorText | Should -Match '\[guid\]::NewGuid\(\)'

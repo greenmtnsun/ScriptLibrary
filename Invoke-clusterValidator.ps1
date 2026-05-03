@@ -51,6 +51,21 @@
     Do NOT run inside SQLPS.exe. Schedule via SQL Agent CmdExec, never
     the native PowerShell subsystem.
 
+    Production hardening expectations (roadmap Phase 3):
+      - the script is signed with the internal PKI cert and the host
+        execution policy is AllSigned
+      - the executing principal is a Group Managed Service Account whose
+        SQL login holds SQLAgentReaderRole + VIEW SERVER STATE only
+      - the remoting credential is resolved via -CredentialSecretName
+        backed by Microsoft.PowerShell.SecretManagement, never inline
+        plaintext
+      - -HardenReportAcl is set so the artifact triad inherits a DACL
+        of SYSTEM + Administrators only (the JSON contains LUN serials,
+        node topology, and service-account names)
+      - the host enforces FullLanguage mode for this script via
+        WDAC/AppLocker allowlist; Constrained Language Mode is a hard
+        fail by design
+
     Companion docs:
         ClusterValidator-Rules.md   (engineering rules)
         ClusterValidator-Roadmap.md (enterprise readiness phases)
@@ -88,6 +103,13 @@ param(
     [ValidateRange(5, 1440)]
     [int]$ForensicCaptureMinutes = 60,
 
+    # Phase 3: security hardening
+    [PSCredential]$Credential,
+
+    [string]$CredentialSecretName,
+
+    [switch]$HardenReportAcl,
+
     [switch]$WriteEventLog,
 
     [string]$EventLogName = 'Application',
@@ -96,6 +118,60 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ---------------------------------------------------------------------------
+# Phase 3 synchronous preflight - fail fast, BEFORE the transcript opens.
+# Anything that legitimately fails here means the run shouldn't start, and
+# we want the error visible on stderr without a half-written transcript.
+# ---------------------------------------------------------------------------
+
+# Constrained Language Mode is a hard fail. The validation script needs
+# .NET reflection (FileSystemAccessRule, EventLog) and complex AST work
+# that CLM blocks. Allowlist via WDAC/AppLocker for production hosts.
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+    throw "ConfigurationError: cluster validator requires FullLanguage mode (current: $($ExecutionContext.SessionState.LanguageMode)). Allowlist this script via WDAC/AppLocker, or run from a FullLanguage host."
+}
+
+# Resolve credentials from SecretManagement if -CredentialSecretName was
+# given without a literal -Credential. Plaintext passwords in script text
+# are a non-starter under ClusterValidator-Rules.md.
+if (-not $Credential -and $CredentialSecretName) {
+    if (-not (Get-Module -ListAvailable -Name Microsoft.PowerShell.SecretManagement)) {
+        throw "ConfigurationError: -CredentialSecretName '$CredentialSecretName' was specified but the Microsoft.PowerShell.SecretManagement module is not installed."
+    }
+    Import-Module Microsoft.PowerShell.SecretManagement -ErrorAction Stop
+    try {
+        $Credential = Get-Secret -Name $CredentialSecretName -ErrorAction Stop
+    } catch {
+        throw "ConfigurationError: failed to resolve secret '$CredentialSecretName' from the SecretManagement vault: $($_.Exception.Message)"
+    }
+    if ($Credential -isnot [PSCredential]) {
+        throw "ConfigurationError: secret '$CredentialSecretName' did not resolve to a PSCredential."
+    }
+}
+
+# Optional report-directory ACL hardening. Runs BEFORE Start-Transcript so
+# the transcript file inherits the locked-down DACL.
+if ($HardenReportAcl) {
+    try {
+        $acl = Get-Acl -Path $ReportPath
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($rule in @($acl.Access)) {
+            $acl.RemoveAccessRule($rule) | Out-Null
+        }
+        foreach ($identity in 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators') {
+            $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $identity,
+                'FullControl',
+                'ContainerInherit,ObjectInherit',
+                'None',
+                'Allow')))
+        }
+        Set-Acl -Path $ReportPath -AclObject $acl
+    } catch {
+        throw "ConfigurationError: failed to harden ACL on '$ReportPath' - $($_.Exception.Message)"
+    }
+}
 
 $correlationId    = [guid]::NewGuid().ToString()
 $timestamp        = Get-Date -Format 'yyyyMMdd_HHmm'
@@ -218,9 +294,24 @@ try {
         -OperationTimeout ($OperationTimeoutSeconds * 1000) `
         -OpenTimeout      ($OpenTimeoutSeconds      * 1000)
 
+    if ($Credential) {
+        Add-Result -Phase 'PreFlight' -Status 'Info' `
+            -Message "Using explicit credential for principal '$($Credential.UserName)'."
+    } else {
+        Add-Result -Phase 'PreFlight' -Status 'Info' `
+            -Message 'Using ambient (current-user) credential for remoting.'
+    }
+
     foreach ($node in $reachable) {
+        $sessionParams = @{
+            ComputerName  = $node
+            SessionOption = $sessionOption
+            ErrorAction   = 'Stop'
+        }
+        if ($Credential) { $sessionParams.Credential = $Credential }
+
         try {
-            $nodeSessions[$node] = New-PSSession -ComputerName $node -SessionOption $sessionOption -ErrorAction Stop
+            $nodeSessions[$node] = New-PSSession @sessionParams
             Add-Result -Phase 'PreFlight' -Status 'Pass' -Message "PSSession opened to $node."
         } catch {
             Add-Result -Phase 'PreFlight' -Status 'Fail' `
