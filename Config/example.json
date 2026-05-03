@@ -1,0 +1,20 @@
+{
+    "_comment": "Example per-cluster config. CLI parameters always override these values. -Nodes, -Credential, and -ConfigPath are intentionally not config-overridable so a stale file cannot silently retarget the wrong cluster.",
+
+    "ExpectedDiskCount":        32,
+    "IncludeTests":             ["Inventory", "Network", "System Configuration", "Storage"],
+    "ExcludeTests":             ["Storage Spaces Direct"],
+    "OperationTimeoutSeconds":  60,
+    "OpenTimeoutSeconds":       30,
+
+    "ExpectedQuorumType":       "NodeAndDiskMajority",
+    "TimeSkewToleranceSeconds": 2.0,
+    "ForensicCaptureMinutes":   60,
+
+    "HardenReportAcl":          true,
+    "WriteEventLog":            true,
+    "EventLogName":             "Application",
+    "EventSource":              "ClusterValidator",
+
+    "ReportPath":               "C:\\Temp\\ClusterValidator"
+}

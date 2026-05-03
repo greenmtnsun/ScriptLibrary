@@ -110,6 +110,13 @@ param(
 
     [switch]$HardenReportAcl,
 
+    # Phase 4: config-file driver. CLI parameters always win; only
+    # parameters absent from $PSBoundParameters fall through to the
+    # JSON file's values. -Nodes is intentionally not config-overridable
+    # so a stale config can never silently target the wrong cluster.
+    [ValidateScript({ Test-Path -Path $_ -PathType Leaf })]
+    [string]$ConfigPath,
+
     [switch]$WriteEventLog,
 
     [string]$EventLogName = 'Application',
@@ -118,6 +125,28 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# ---------------------------------------------------------------------------
+# Phase 4 config-file merge - runs first so subsequent preflights see the
+# resolved values. CLI args (anything in $PSBoundParameters) always win;
+# only unspecified parameters fall through to the JSON file. -Nodes,
+# -Credential, and -ConfigPath itself are never config-overridable.
+# ---------------------------------------------------------------------------
+$ConfigMergedKeys = @()
+if ($ConfigPath) {
+    try {
+        $configData = Get-Content -Path $ConfigPath -Raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        throw "ConfigurationError: failed to parse config file '$ConfigPath' - $($_.Exception.Message)"
+    }
+    $protectedKeys = 'Nodes', 'Credential', 'ConfigPath'
+    foreach ($prop in $configData.PSObject.Properties) {
+        if ($prop.Name -in $protectedKeys) { continue }
+        if ($PSBoundParameters.ContainsKey($prop.Name)) { continue }
+        Set-Variable -Name $prop.Name -Value $prop.Value -Scope 0
+        $ConfigMergedKeys += $prop.Name
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Phase 3 synchronous preflight - fail fast, BEFORE the transcript opens.
@@ -249,6 +278,92 @@ function Get-ClvClusterResource {
     }
 }
 
+# Pure logic helpers - no remoting, no I/O. Live here so the unit suite
+# can AST-extract and exercise them without ever opening a PSSession.
+
+function Get-ClvTimeSkew {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object[]]$Samples
+    )
+    $valid = @($Samples | Where-Object { $_.UtcNow })
+    if ($valid.Count -lt 2) {
+        return [pscustomobject]@{
+            Skew        = $null
+            Min         = $null
+            Max         = $null
+            SampleCount = $valid.Count
+        }
+    }
+    $min = ($valid.UtcNow | Measure-Object -Minimum).Minimum
+    $max = ($valid.UtcNow | Measure-Object -Maximum).Maximum
+    [pscustomobject]@{
+        Skew        = [math]::Round(($max - $min).TotalSeconds, 3)
+        Min         = $min
+        Max         = $max
+        SampleCount = $valid.Count
+    }
+}
+
+function Get-ClvHotFixDrift {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object[]]$Reports
+    )
+    $allKbs = $Reports.HotFixIDs | Sort-Object -Unique
+    $drift = foreach ($r in $Reports) {
+        $missing = @($allKbs | Where-Object { $_ -notin $r.HotFixIDs })
+        if ($missing.Count -gt 0) {
+            [pscustomobject]@{ ComputerName = $r.ComputerName; Missing = $missing }
+        }
+    }
+    [pscustomobject]@{
+        AllKbCount = @($allKbs).Count
+        Drift      = @($drift)
+    }
+}
+
+function Get-ClvServiceAccountIssues {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object[]]$Reports,
+        [string[]]$BuiltInAccounts = @('LocalSystem', 'NT AUTHORITY\LocalService', 'NT AUTHORITY\NetworkService')
+    )
+    $issues = New-Object System.Collections.Generic.List[object]
+
+    foreach ($r in $Reports) {
+        foreach ($svc in $r.Services) {
+            if ($svc.StartName -in $BuiltInAccounts) {
+                $issues.Add([pscustomobject]@{
+                    ComputerName = $r.ComputerName
+                    Service      = $svc.Name
+                    StartName    = $svc.StartName
+                    Issue        = 'BuiltInAccount'
+                })
+            }
+        }
+    }
+
+    $serviceMap = @{}
+    foreach ($r in $Reports) {
+        foreach ($svc in $r.Services) {
+            if (-not $serviceMap.ContainsKey($svc.Name)) { $serviceMap[$svc.Name] = @{} }
+            $serviceMap[$svc.Name][$r.ComputerName] = $svc.StartName
+        }
+    }
+    foreach ($svcName in $serviceMap.Keys) {
+        $accounts = @($serviceMap[$svcName].Values | Sort-Object -Unique)
+        if ($accounts.Count -gt 1) {
+            $issues.Add([pscustomobject]@{
+                Service  = $svcName
+                Accounts = $serviceMap[$svcName]
+                Issue    = 'AccountMismatch'
+            })
+        }
+    }
+    , $issues.ToArray()
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -267,6 +382,17 @@ try {
     # -----------------------------------------------------------------------
     # Phase 1: PreFlight - module availability, WSMan reachability, sessions
     # -----------------------------------------------------------------------
+    if ($ConfigPath) {
+        if ($ConfigMergedKeys.Count -gt 0) {
+            Add-Result -Phase 'PreFlight' -Status 'Info' `
+                -Message "Config '$ConfigPath' supplied $($ConfigMergedKeys.Count) parameter(s)." `
+                -Data @{ ConfigPath = $ConfigPath; MergedKeys = $ConfigMergedKeys }
+        } else {
+            Add-Result -Phase 'PreFlight' -Status 'Info' `
+                -Message "Config '$ConfigPath' loaded but every key was overridden by the command line."
+        }
+    }
+
     foreach ($mod in 'FailoverClusters', 'MPIO') {
         if (Get-Module -ListAvailable -Name $mod) {
             Add-Result -Phase 'PreFlight' -Status 'Pass' -Message "Module '$mod' available."
@@ -344,43 +470,43 @@ try {
 
     # -----------------------------------------------------------------------
     # Phase 3: Storage - per-node disk count + cross-node serial consistency
+    # Fanned out via the multi-session wrapper so all nodes are queried in
+    # parallel.
     # -----------------------------------------------------------------------
-    $diskInventory = @{}
-    foreach ($node in $sessionNodes) {
-        try {
-            $remote = Invoke-ClvRemote -Session $nodeSessions[$node] -ScriptBlock {
-                $disks = Get-Disk | Where-Object Number -ne 0
-                [pscustomobject]@{
-                    ComputerName = $env:COMPUTERNAME
-                    Count        = ($disks | Measure-Object).Count
-                    Serials      = ($disks | Select-Object -ExpandProperty SerialNumber -ErrorAction SilentlyContinue) -join ','
-                }
+    try {
+        $diskInventory = Invoke-ClvRemote -Sessions @($nodeSessions.Values) -ScriptBlock {
+            $disks = Get-Disk | Where-Object Number -ne 0
+            [pscustomobject]@{
+                ComputerName = $env:COMPUTERNAME
+                Count        = ($disks | Measure-Object).Count
+                Serials      = ($disks | Select-Object -ExpandProperty SerialNumber -ErrorAction SilentlyContinue) -join ','
             }
-            $diskInventory[$node] = $remote
+        }
 
+        foreach ($remote in $diskInventory) {
             if ($remote.Count -eq $ExpectedDiskCount) {
                 Add-Result -Phase 'Storage' -Status 'Pass' `
-                    -Message "$node sees $($remote.Count) shared disks (expected $ExpectedDiskCount)." `
+                    -Message "$($remote.ComputerName) sees $($remote.Count) shared disks (expected $ExpectedDiskCount)." `
                     -Data $remote
             } else {
                 Add-Result -Phase 'Storage' -Status 'Fail' `
-                    -Message "$node sees $($remote.Count) shared disks (expected $ExpectedDiskCount)." `
+                    -Message "$($remote.ComputerName) sees $($remote.Count) shared disks (expected $ExpectedDiskCount)." `
                     -Data $remote
             }
-        } catch {
-            Add-Result -Phase 'Storage' -Status 'Fail' `
-                -Message "Disk enumeration failed on $node : $($_.Exception.Message)"
         }
-    }
 
-    $serialSets = $diskInventory.Values | Where-Object { $_.Serials } |
-                  Select-Object -ExpandProperty Serials -Unique
-    if (@($serialSets).Count -le 1) {
-        Add-Result -Phase 'Storage' -Status 'Pass' -Message 'All reachable nodes report an identical LUN serial set.'
-    } else {
+        $serialSets = $diskInventory | Where-Object { $_.Serials } |
+                      Select-Object -ExpandProperty Serials -Unique
+        if (@($serialSets).Count -le 1) {
+            Add-Result -Phase 'Storage' -Status 'Pass' -Message 'All reachable nodes report an identical LUN serial set.'
+        } else {
+            Add-Result -Phase 'Storage' -Status 'Fail' `
+                -Message 'Nodes report divergent LUN serial sets; verify SAN zoning and host masking.' `
+                -Data @{ DistinctSets = @($serialSets).Count }
+        }
+    } catch {
         Add-Result -Phase 'Storage' -Status 'Fail' `
-            -Message 'Nodes report divergent LUN serial sets; verify SAN zoning and host masking.' `
-            -Data @{ DistinctSets = @($serialSets).Count }
+            -Message "Storage interrogation failed: $($_.Exception.Message)"
     }
 
     # -----------------------------------------------------------------------
@@ -483,23 +609,18 @@ try {
                 UtcNow       = (Get-Date).ToUniversalTime()
             }
         }
-        $valid = @($samples | Where-Object { $_.UtcNow })
-        if ($valid.Count -ge 2) {
-            $min  = ($valid.UtcNow | Measure-Object -Minimum).Minimum
-            $max  = ($valid.UtcNow | Measure-Object -Maximum).Maximum
-            $skew = [math]::Round(($max - $min).TotalSeconds, 3)
-            if ($skew -gt $TimeSkewToleranceSeconds) {
-                Add-Result -Phase 'Time' -Status 'Fail' `
-                    -Message "Cross-node time skew is ${skew}s; tolerance is ${TimeSkewToleranceSeconds}s." `
-                    -Data $valid
-            } else {
-                Add-Result -Phase 'Time' -Status 'Pass' `
-                    -Message "Cross-node time skew is ${skew}s (within ${TimeSkewToleranceSeconds}s)." `
-                    -Data $valid
-            }
-        } else {
+        $skewReport = Get-ClvTimeSkew -Samples $samples
+        if ($null -eq $skewReport.Skew) {
             Add-Result -Phase 'Time' -Status 'Warn' `
-                -Message 'Insufficient time samples to evaluate skew.'
+                -Message "Insufficient time samples to evaluate skew (got $($skewReport.SampleCount))."
+        } elseif ($skewReport.Skew -gt $TimeSkewToleranceSeconds) {
+            Add-Result -Phase 'Time' -Status 'Fail' `
+                -Message "Cross-node time skew is $($skewReport.Skew)s; tolerance is ${TimeSkewToleranceSeconds}s." `
+                -Data $skewReport
+        } else {
+            Add-Result -Phase 'Time' -Status 'Pass' `
+                -Message "Cross-node time skew is $($skewReport.Skew)s (within ${TimeSkewToleranceSeconds}s)." `
+                -Data $skewReport
         }
     } catch {
         Add-Result -Phase 'Time' -Status 'Warn' `
@@ -551,20 +672,13 @@ try {
                 HotFixIDs    = @(Get-HotFix | Sort-Object HotFixID | Select-Object -ExpandProperty HotFixID)
             }
         }
-        $allKbs = $hotfixes.HotFixIDs | Sort-Object -Unique
-        $drift = foreach ($n in $hotfixes) {
-            $absent = @($allKbs | Where-Object { $_ -notin $n.HotFixIDs })
-            if ($absent.Count -gt 0) {
-                [pscustomobject]@{ ComputerName = $n.ComputerName; Missing = $absent }
-            }
-        }
-        if ($drift) {
+        $driftReport = Get-ClvHotFixDrift -Reports $hotfixes
+        if ($driftReport.Drift.Count -gt 0) {
             Add-Result -Phase 'Hotfix' -Status 'Warn' `
-                -Message 'Hotfix drift detected across nodes.' -Data $drift
+                -Message 'Hotfix drift detected across nodes.' -Data $driftReport.Drift
         } else {
-            $kbCount = @($allKbs).Count
             Add-Result -Phase 'Hotfix' -Status 'Pass' `
-                -Message "All nodes share an identical KB level ($kbCount KBs)."
+                -Message "All nodes share an identical KB level ($($driftReport.AllKbCount) KBs)."
         }
     } catch {
         Add-Result -Phase 'Hotfix' -Status 'Warn' `
@@ -581,41 +695,8 @@ try {
                 Select-Object Name, StartName, State
             [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Services = $svcs }
         }
-        $builtIn = @('LocalSystem', 'NT AUTHORITY\LocalService', 'NT AUTHORITY\NetworkService')
-        $issues = New-Object System.Collections.Generic.List[object]
-
-        foreach ($n in $svcAccounts) {
-            foreach ($svc in $n.Services) {
-                if ($svc.StartName -in $builtIn) {
-                    $issues.Add([pscustomobject]@{
-                        ComputerName = $n.ComputerName
-                        Service      = $svc.Name
-                        StartName    = $svc.StartName
-                        Issue        = 'BuiltInAccount'
-                    })
-                }
-            }
-        }
-
-        $serviceMap = @{}
-        foreach ($n in $svcAccounts) {
-            foreach ($svc in $n.Services) {
-                if (-not $serviceMap.ContainsKey($svc.Name)) { $serviceMap[$svc.Name] = @{} }
-                $serviceMap[$svc.Name][$n.ComputerName] = $svc.StartName
-            }
-        }
-        foreach ($svcName in $serviceMap.Keys) {
-            $accounts = $serviceMap[$svcName].Values | Sort-Object -Unique
-            if (@($accounts).Count -gt 1) {
-                $issues.Add([pscustomobject]@{
-                    Service  = $svcName
-                    Accounts = $serviceMap[$svcName]
-                    Issue    = 'AccountMismatch'
-                })
-            }
-        }
-
-        if ($issues.Count -gt 0) {
+        $issues = Get-ClvServiceAccountIssues -Reports $svcAccounts
+        if (@($issues).Count -gt 0) {
             Add-Result -Phase 'ServiceAccount' -Status 'Warn' `
                 -Message 'Service account hygiene issues detected.' -Data $issues
         } else {

@@ -162,6 +162,40 @@ Describe 'Invoke-clusterValidator.ps1 - Static' {
         }
     }
 
+    Context 'Roadmap Phase 4 - Scale & Operability' {
+        It 'exposes -ConfigPath' {
+            $paramNames = $script:Ast.ParamBlock.Parameters.Name.VariablePath.UserPath
+            $paramNames | Should -Contain 'ConfigPath'
+        }
+        It 'merges JSON config keys before the synchronous preflight' {
+            $script:OrchestratorText | Should -Match 'ConvertFrom-Json'
+            $mergeIdx = $script:OrchestratorText.IndexOf('Set-Variable')
+            $clmIdx   = $script:OrchestratorText.IndexOf('LanguageMode')
+            $mergeIdx | Should -BeGreaterThan 0
+            $mergeIdx | Should -BeLessThan $clmIdx -Because 'config merge must populate variables before CLM preflight reads them'
+        }
+        It 'protects -Nodes, -Credential, and -ConfigPath from config-file override' {
+            $script:OrchestratorText | Should -Match "protectedKeys\s*=\s*'Nodes',\s*'Credential',\s*'ConfigPath'"
+        }
+        It 'defines the three pure-logic helpers' {
+            $script:OrchestratorText | Should -Match 'function\s+Get-ClvTimeSkew\b'
+            $script:OrchestratorText | Should -Match 'function\s+Get-ClvHotFixDrift\b'
+            $script:OrchestratorText | Should -Match 'function\s+Get-ClvServiceAccountIssues\b'
+        }
+        It 'uses the pure helpers from phases 7, 9, 10' {
+            $script:OrchestratorText | Should -Match 'Get-ClvTimeSkew\s+-Samples'
+            $script:OrchestratorText | Should -Match 'Get-ClvHotFixDrift\s+-Reports'
+            $script:OrchestratorText | Should -Match 'Get-ClvServiceAccountIssues\s+-Reports'
+        }
+        It 'parallelizes Storage via the multi-session wrapper' {
+            # The Storage block must use -Sessions rather than a per-node loop.
+            $storageStart = $script:OrchestratorText.IndexOf('# Phase 3: Storage')
+            $storageEnd   = $script:OrchestratorText.IndexOf('# Phase 4: SCSI3')
+            $storageBlock = $script:OrchestratorText.Substring($storageStart, $storageEnd - $storageStart)
+            $storageBlock | Should -Match 'Invoke-ClvRemote\s+-Sessions'
+        }
+    }
+
     Context 'Roadmap Phase 3 - Security Hardening' {
         It 'exposes -Credential, -CredentialSecretName, -HardenReportAcl' {
             $paramNames = $script:Ast.ParamBlock.Parameters.Name.VariablePath.UserPath
