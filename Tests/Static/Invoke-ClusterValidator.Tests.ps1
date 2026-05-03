@@ -141,9 +141,10 @@ Describe 'ClusterValidator module - Static' {
     }
 
     Context 'Rules §11 - Public Function Contract' {
-        It 'manifest exports exactly Invoke-ClusterValidator' {
+        It 'manifest exports Invoke-ClusterValidator and Test-ClusterValidatorConfig' {
             $manifest = Import-PowerShellDataFile -Path $script:ManifestPath
-            $manifest.FunctionsToExport | Should -Be @('Invoke-ClusterValidator')
+            $expected = @('Invoke-ClusterValidator', 'Test-ClusterValidatorConfig')
+            @($manifest.FunctionsToExport | Sort-Object) | Should -Be ($expected | Sort-Object)
         }
         It 'manifest does not export cmdlets, variables, or aliases' {
             $manifest = Import-PowerShellDataFile -Path $script:ManifestPath
@@ -151,12 +152,27 @@ Describe 'ClusterValidator module - Static' {
             $manifest.VariablesToExport | Should -BeNullOrEmpty
             $manifest.AliasesToExport   | Should -BeNullOrEmpty
         }
+        It 'every public file matches a manifest export' {
+            $manifest = Import-PowerShellDataFile -Path $script:ManifestPath
+            $publicFiles = Get-ChildItem -Path (Join-Path $script:ModuleRoot 'Public') -Filter '*.ps1' -File
+            foreach ($f in $publicFiles) {
+                $f.BaseName | Should -BeIn $manifest.FunctionsToExport `
+                    -Because "public file '$($f.Name)' must be listed in FunctionsToExport"
+            }
+        }
         It 'private helpers all use the Clv prefix' {
             $privateRoot = Join-Path $script:ModuleRoot 'Private'
             $files = Get-ChildItem -Path $privateRoot -Filter '*.ps1' -File
             foreach ($f in $files) {
                 $f.BaseName | Should -Match '^[A-Z][a-z]+-Clv[A-Z]\w*$' `
                     -Because "private helper '$($f.Name)' must use the Verb-ClvNoun pattern"
+            }
+        }
+        It 'public functions do NOT carry the Clv prefix' {
+            $publicFiles = Get-ChildItem -Path (Join-Path $script:ModuleRoot 'Public') -Filter '*.ps1' -File
+            foreach ($f in $publicFiles) {
+                $f.BaseName | Should -Not -Match '-Clv' `
+                    -Because "public functions use the full ClusterValidator brand, not the Clv private prefix"
             }
         }
     }

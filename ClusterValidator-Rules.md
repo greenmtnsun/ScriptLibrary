@@ -199,19 +199,27 @@ shape exists.
 
 ## 11. Public Function Contract
 
-Exactly one function is exported from the module:
-**`Invoke-ClusterValidator`**.
+The module exports exactly:
 
-The manifest's `FunctionsToExport` lists it explicitly — never `*`.
-`CmdletsToExport`, `VariablesToExport`, and `AliasesToExport` are
+- **`Invoke-ClusterValidator`** — the orchestrator (1.0.0+)
+- **`Test-ClusterValidatorConfig`** — static lint of a config file
+  against the orchestrator's parameter schema (1.3.0+)
+
+The manifest's `FunctionsToExport` lists each name explicitly — never
+`*`. `CmdletsToExport`, `VariablesToExport`, and `AliasesToExport` are
 explicit empty arrays so nothing leaks accidentally.
 
 Private helpers live under `Private/` and use the **`Clv`** namespace
-prefix (`Add-ClvResult`, `Invoke-ClvRemote`, `Get-ClvTimeSkew`, etc.)
-so they are recognizable if they leak into a host's session via
-misuse of `-Scope Global`.
+prefix (`Add-ClvResult`, `Invoke-ClvRemote`, `Get-ClvTimeSkew`,
+`Get-ClvHostColocation`, etc.) so they are recognizable if they leak
+into a host's session via misuse of `-Scope Global`. Public functions
+do **not** carry the `Clv` prefix — they use the full
+`ClusterValidator` brand.
 
-Adding a new public function or alias requires a roadmap amendment.
+Adding a new public function or alias requires a CHANGELOG entry and
+a `FunctionsToExport` update in the same commit. The Static loader
+test enforces that the manifest list and the actual exported set
+match.
 
 ---
 

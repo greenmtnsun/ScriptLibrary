@@ -283,14 +283,102 @@ Describe 'Add-ClvResult - Category enforcement (Rules §7, 1.1.0)' {
     }
 }
 
+Describe 'Test-ClusterValidatorConfig (1.3.0)' {
+
+    BeforeAll {
+        $script:LintFixtureDir = Join-Path $TestDrive 'lint-fixtures'
+        $null = New-Item -Path $script:LintFixtureDir -ItemType Directory -Force
+
+        function script:WriteFixture {
+            param([string]$Name, [object]$Object)
+            $path = Join-Path $script:LintFixtureDir "$Name.json"
+            $Object | ConvertTo-Json -Depth 6 | Set-Content -Path $path -Encoding UTF8
+            $path
+        }
+    }
+
+    It 'reports Valid=true for a clean config' {
+        $path = WriteFixture 'clean' @{
+            ExpectedDiskCount       = 32
+            TimeSkewToleranceSeconds = 2.0
+            ExpectedQuorumType       = 'NodeAndDiskMajority'
+            HardenReportAcl          = $true
+            IncludeTests             = @('Inventory','Network','System Configuration','Storage')
+            ExcludeTests             = @('Storage Spaces Direct')
+        }
+        $r = Test-ClusterValidatorConfig -ConfigPath $path
+        $r.Valid           | Should -BeTrue
+        @($r.Issues).Count | Should -Be 0
+    }
+
+    It 'flags a typoed parameter as UnknownParameter' {
+        $path = WriteFixture 'typo' @{ ExpectedDiskCnt = 32 }
+        $r = Test-ClusterValidatorConfig -ConfigPath $path
+        $r.Valid | Should -BeFalse
+        $r.Issues | Where-Object Issue -eq 'UnknownParameter' | Should -Not -BeNullOrEmpty
+        ($r.Issues | Where-Object Issue -eq 'UnknownParameter').Key | Should -Be 'ExpectedDiskCnt'
+    }
+
+    It 'flags a protected key (Nodes) as ProtectedKey' {
+        $path = WriteFixture 'protected' @{ Nodes = @('a','b') }
+        $r = Test-ClusterValidatorConfig -ConfigPath $path
+        $r.Valid | Should -BeFalse
+        $r.Issues | Where-Object Issue -eq 'ProtectedKey' | Should -Not -BeNullOrEmpty
+    }
+
+    It 'flags a value outside ValidateRange' {
+        $path = WriteFixture 'oor' @{ ExpectedDiskCount = 999999 }
+        $r = Test-ClusterValidatorConfig -ConfigPath $path
+        $r.Valid | Should -BeFalse
+        $r.Issues | Where-Object Issue -eq 'OutOfRange' | Should -Not -BeNullOrEmpty
+    }
+
+    It 'flags a value outside ValidateSet' {
+        $path = WriteFixture 'badset' @{ ExpectedQuorumType = 'NodeAndZebraMajority' }
+        $r = Test-ClusterValidatorConfig -ConfigPath $path
+        $r.Valid | Should -BeFalse
+        $r.Issues | Where-Object Issue -eq 'InvalidValue' | Should -Not -BeNullOrEmpty
+    }
+
+    It 'ignores underscore-prefixed comment keys' {
+        $path = WriteFixture 'comments' @{
+            '_comment'        = 'this is documentation'
+            ExpectedDiskCount = 32
+        }
+        $r = Test-ClusterValidatorConfig -ConfigPath $path
+        $r.Valid | Should -BeTrue
+    }
+
+    It 'returns a JsonParseError when the file is invalid JSON' {
+        $path = Join-Path $script:LintFixtureDir 'broken.json'
+        '{ not json at all' | Set-Content -Path $path
+        $r = Test-ClusterValidatorConfig -ConfigPath $path
+        $r.Valid | Should -BeFalse
+        ($r.Issues | Where-Object Issue -eq 'JsonParseError').Count | Should -Be 1
+    }
+
+    It 'accepts an empty config (all defaults apply)' {
+        $path = WriteFixture 'empty' @{}
+        $r = Test-ClusterValidatorConfig -ConfigPath $path
+        $r.Valid           | Should -BeTrue
+        @($r.Issues).Count | Should -Be 0
+    }
+
+    It 'lints the bundled Config\example.json clean' {
+        $bundled = Join-Path $ProjectRoot 'Config\example.json'
+        $r = Test-ClusterValidatorConfig -ConfigPath $bundled
+        $r.Valid | Should -BeTrue -Because "the example config in the repo must lint cleanly"
+    }
+}
+
 Describe 'ClusterValidator module - Loader' {
-    It 'exports exactly Invoke-ClusterValidator' {
-        $exports = (Get-Module ClusterValidator).ExportedFunctions.Keys
-        $exports | Should -Be @('Invoke-ClusterValidator')
+    It 'exports Invoke-ClusterValidator and Test-ClusterValidatorConfig' {
+        $exports = @((Get-Module ClusterValidator).ExportedFunctions.Keys | Sort-Object)
+        $exports | Should -Be (@('Invoke-ClusterValidator', 'Test-ClusterValidatorConfig') | Sort-Object)
     }
     It 'is idempotent under repeated Import-Module -Force' {
         $manifest = Join-Path $ProjectRoot 'ClusterValidator\ClusterValidator.psd1'
         { Import-Module -Name $manifest -Force -ErrorAction Stop } | Should -Not -Throw
-        (Get-Module ClusterValidator).ExportedFunctions.Keys.Count | Should -Be 1
+        (Get-Module ClusterValidator).ExportedFunctions.Keys.Count | Should -Be 2
     }
 }

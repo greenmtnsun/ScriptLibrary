@@ -1,6 +1,6 @@
 @{
     RootModule        = 'ClusterValidator.psm1'
-    ModuleVersion     = '1.2.0'
+    ModuleVersion     = '1.3.0'
     GUID              = 'b836e54f-ed7b-48a0-b3ce-fa369678f13d'
     Author            = 'ScriptLibrary maintainers'
     CompanyName       = 'GreenMtnSun'
@@ -14,7 +14,10 @@
     # dependency checked at runtime by Phase 1 PreFlight.
     RequiredModules   = @('FailoverClusters')
 
-    FunctionsToExport = @('Invoke-ClusterValidator')
+    FunctionsToExport = @(
+        'Invoke-ClusterValidator',
+        'Test-ClusterValidatorConfig'
+    )
     CmdletsToExport   = @()
     VariablesToExport = @()
     AliasesToExport   = @()
@@ -23,7 +26,7 @@
         PSData = @{
             Tags         = @('Cluster', 'Validation', 'SQL', 'FCI', 'SAN', 'SCSI3', 'MPIO')
             ProjectUri   = 'https://github.com/greenmtnsun/scriptlibrary'
-            ReleaseNotes = '1.2.0 - VMware DRS anti-affinity check (Phase 11). Optional, gated on PowerCLI being installed and -VCenterServer being supplied. Verifies FCI VMs are on distinct ESXi hosts and that an enabled DRS VMAntiAffinity rule covers them. New AffinityViolation category in the Rules §7 vocabulary.'
+            ReleaseNotes = '1.3.0 - New public function Test-ClusterValidatorConfig statically validates a Config\*.json against the Invoke-ClusterValidator parameter schema. Catches typos, unknown keys, type mismatches, ValidateSet violations, ValidateRange overruns, and protected-key writes (Nodes/Credential/ConfigPath) before they hit production. Public surface expanded from one to two exports.'
         }
     }
 }

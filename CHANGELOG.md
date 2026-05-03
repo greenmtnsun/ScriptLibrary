@@ -4,6 +4,62 @@ All notable changes to the **ClusterValidator** module are documented
 here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.3.0] — 2026-05-03
+
+### Added
+
+- **`Test-ClusterValidatorConfig`** — new public function. Statically
+  validates a `Config\*.json` against the `Invoke-ClusterValidator`
+  parameter schema:
+  - **UnknownParameter** — typoed or stale keys
+  - **ProtectedKey** — `Nodes`, `Credential`, `ConfigPath` written
+    into the config (never config-overridable)
+  - **TypeMismatch** — JSON value not assignable to the declared
+    parameter type
+  - **InvalidValue** — value outside `[ValidateSet]`
+  - **OutOfRange** — value outside `[ValidateRange]`
+  - **JsonParseError** — file isn't valid JSON
+- Underscore-prefixed keys (`_comment`, etc.) are treated as JSON
+  documentation and ignored.
+- Returns a `pscustomobject` with `ConfigPath`, `Valid` (bool), and
+  a structured `Issues` array. Designed for CI: lint every config
+  on PR, fail the build if any `Valid` is `$false`.
+
+### Changed
+
+- **Public surface expanded from one function to two.** Manifest
+  `FunctionsToExport` now lists `Invoke-ClusterValidator` and
+  `Test-ClusterValidatorConfig`. The `Clv` namespace prefix remains
+  reserved for **private** helpers; public functions use the full
+  `ClusterValidator` brand.
+- Rules §11 (Public Function Contract) updated to describe both
+  exports and the public/private prefix discipline.
+
+### Tests
+
+- Static suite: §11 contract test now asserts `FunctionsToExport`
+  matches the actual `Public/*.ps1` set, plus a sanity check that
+  no public file accidentally adopts the `Clv` private prefix.
+- Unit suite: nine cases for `Test-ClusterValidatorConfig` covering
+  clean/typo/protected-key/out-of-range/bad-set/comment/empty/
+  broken-json paths plus a smoke test that lints the bundled
+  `Config\example.json` clean.
+- Loader test updated to expect both exports.
+
+### Notes
+
+- Recommended CI pattern:
+
+  ```powershell
+  $bad = Get-ChildItem .\Config\*.json | ForEach-Object {
+      Test-ClusterValidatorConfig -ConfigPath $_.FullName
+  } | Where-Object { -not $_.Valid }
+  if ($bad) { exit 1 }
+  ```
+
+  Catches config drift at PR time rather than at the next 03:00 AM
+  scheduled run.
+
 ## [1.2.0] — 2026-05-03
 
 ### Added
