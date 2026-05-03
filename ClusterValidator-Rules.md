@@ -22,16 +22,24 @@ mockable, or independently testable becomes its own script.
 
 ---
 
-## 2. No `$PSScriptRoot`
+## 2. No `$PSScriptRoot` (script-context only)
 
 `$PSScriptRoot` resolves differently under dot-sourcing, jobs, remoting,
-and SQL Agent CmdExec. It is forbidden here. Use explicit parameters:
+and SQL Agent CmdExec. Forbidden in script files (`.ps1`). Use explicit
+parameters instead:
 
 ```powershell
 param([string]$ProjectRoot)
 ```
 
-A static test enforces the absence of the token across the tree.
+**Carve-out:** module loader files (`.psm1`) MAY use `$PSScriptRoot` —
+it is the canonical idiom for resolving sibling `Public/` and
+`Private/` folders during `Import-Module`, and the dot-sourcing /
+remoting / CmdExec hazards above do not apply to module load (modules
+are loaded via `Import-Module`, not script execution).
+
+The static test enforces this with an AST scan that excludes `.psm1`
+files.
 
 ---
 
@@ -170,25 +178,65 @@ Small, verifiable steps over large unbounded changes.
 
 ---
 
-## 10. Module Evolution Trigger
+## 10. Module Evolution Trigger — **FIRED**
 
-The validator stays a single signed script as long as that shape carries
-the risk. Promote it to a PowerShell module (`.psd1` + `.psm1` +
-`Public/` + `Private/`) when **any** of these signals fire:
+Triggered at the end of roadmap Phase 4: 13 phases (passed 12), 790
+lines (within 10 of 800), and helpers genuinely reusable by sibling
+scripts. The validator is now packaged as the **ClusterValidator**
+module (`ClusterValidator.psd1` + `ClusterValidator.psm1` + `Public/`
++ `Private/`). The root `Invoke-clusterValidator.ps1` survives as a
+back-compat wrapper that forwards `$args` to `Invoke-ClusterValidator`.
 
-- The orchestrator exceeds ~800 lines or 12 distinct phases.
-- A second script in this repo wants to reuse the same helpers
-  (wrappers, classifier, artifact writer).
-- An external consumer needs to import individual functions rather than
-  invoke the script.
-- A signed-package distribution channel (PSGallery, internal feed) is
-  adopted — modules carry the version metadata and dependency manifest
-  that signed scripts cannot.
-- Constrained Language Mode allowlisting is required and the policy is
-  authored at module identity, not script path.
+The remaining trigger signals (signed-package distribution, CLM
+allowlisting at module identity) are roadmap Phase 5 deliverables.
 
-When the trigger fires, this document grows three rules — public
-function contract (exported names + aliases), manifest discipline
-(`RequiredModules`, `FunctionsToExport`, semver), and a loader test —
-and §4's phase contract is reframed around the exported orchestrator
-function. Until then, no speculative module scaffolding.
+§§11–13 below capture the rules that activate now that the module
+shape exists.
+
+---
+
+## 11. Public Function Contract
+
+Exactly one function is exported from the module:
+**`Invoke-ClusterValidator`**.
+
+The manifest's `FunctionsToExport` lists it explicitly — never `*`.
+`CmdletsToExport`, `VariablesToExport`, and `AliasesToExport` are
+explicit empty arrays so nothing leaks accidentally.
+
+Private helpers live under `Private/` and use the **`Clv`** namespace
+prefix (`Add-ClvResult`, `Invoke-ClvRemote`, `Get-ClvTimeSkew`, etc.)
+so they are recognizable if they leak into a host's session via
+misuse of `-Scope Global`.
+
+Adding a new public function or alias requires a roadmap amendment.
+
+---
+
+## 12. Manifest Discipline
+
+- `ModuleVersion` follows **semver**. Bump major on breaking parameter
+  changes, minor on new phases or new public surface, patch on
+  bugfixes and doc edits.
+- `RequiredModules` enumerates every external module the public
+  function calls. We do not rely on implicit availability.
+- `FunctionsToExport`, `CmdletsToExport`, `VariablesToExport`,
+  `AliasesToExport` are explicit lists — never `*`, never omitted.
+- `GUID` is generated once at module birth and never changes.
+- `PowerShellVersion` matches the lowest host we will ever run on.
+
+The static test parses the manifest and verifies all of the above.
+
+---
+
+## 13. Loader Test
+
+A static test imports the module fresh (`Import-Module -Force`) in a
+clean runspace and asserts:
+
+- the manifest parses without errors
+- `Invoke-ClusterValidator` is exported
+- nothing else is exported (no private helper leaks via `Set-Alias`,
+  no accidental `-Scope Global` writes during dot-source)
+- loading the module is idempotent (a second `Import-Module -Force`
+  does not double-register handlers or duplicate exports)

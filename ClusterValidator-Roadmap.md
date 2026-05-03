@@ -7,6 +7,26 @@ acceptance criteria.
 
 ---
 
+## Status snapshot
+
+| Phase | State | Notes |
+|-------|-------|-------|
+| 0 Baseline | ✅ done | |
+| 1 Audit & Observability | ✅ done | correlation GUID, transcript, WSMan, reusable PSSessions |
+| 2 Validation Depth | ✅ done | 6 new phases + Forensic capture |
+| 3 Security Hardening | ✅ done | CLM preflight, SecretManagement, ACL hardening |
+| 4 Scale & Operability | ✅ done (partial) | ConfigPath, parallel Storage, pure helpers, Pester unit suite. Deferred: GitHub Actions wiring, optional PowerCLI VMware check |
+| 5 Release & Fleet Rollout | ⏳ next | tag, signed package, distribution, dashboard, runbook |
+
+Module promotion (Rules §10) **fired** at the end of Phase 4. Code now
+ships as the **ClusterValidator** module under `.\ClusterValidator\`.
+The original `Invoke-clusterValidator.ps1` survives at the repo root
+as a back-compat wrapper that forwards `$args` to
+`Invoke-ClusterValidator`. From this point on, the public surface is
+the function, not the script.
+
+---
+
 ## Phase 0 — Baseline (complete)
 
 **State on commit `c62f675`:**
