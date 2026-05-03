@@ -1,280 +1,168 @@
 # Invoke-clusterValidator Development Rules
 
-## Purpose
-
-Non-negotiable engineering rules for the cluster validator and its
-supporting tooling inside the `ScriptLibrary` repository.
-
-Script under governance:
-
-`Invoke-clusterValidator.ps1`
-
-All contributors and automation must follow these rules before adding or
-modifying code. Companion document: `ClusterValidator-Roadmap.md`.
+Engineering quality rules for `Invoke-clusterValidator.ps1`. Every rule
+below is a quality gate, not project-management overhead. Companion
+document: `ClusterValidator-Roadmap.md`.
 
 ---
 
-## 1. Atomic Scripts Only
+## 1. Atomic Scripts
 
-Every script in this project must be atomic.
-
-An atomic script means:
+Helper logic is split into atomic scripts:
 
 - One script does one clear task.
-- The script is complete and runnable by itself.
-- The script does not depend on hidden context.
-- The script accepts explicit parameters.
-- The script performs state checks before making changes.
-- The script reports exactly what it changed.
-- The script can be tested independently with Pester.
+- Runnable on its own with explicit parameters.
+- No hidden context, no implicit working directory.
+- State-checks before any side effect.
+- Reports exactly what it changed.
+- Independently testable with Pester.
 
-`Invoke-clusterValidator.ps1` is the orchestrator. Helper logic that is
-reusable, testable, or gateable belongs in `Tools\` or a future
-`Private\` folder as its own atomic script.
+`Invoke-clusterValidator.ps1` is the orchestrator. Anything reusable,
+mockable, or independently testable becomes its own script.
 
 ---
 
-## 2. Mandatory State Check Before Code
+## 2. No `$PSScriptRoot`
 
-Before writing or modifying code, run the project state checker:
+`$PSScriptRoot` resolves differently under dot-sourcing, jobs, remoting,
+and SQL Agent CmdExec. It is forbidden here. Use explicit parameters:
 
 ```powershell
-& '.\Tools\Test-ClvProjectState.ps1' -ProjectRoot (Resolve-Path '.')
+param([string]$ProjectRoot)
 ```
 
-The state checker must:
-
-- verify the expected project structure (see §6)
-- confirm `Invoke-clusterValidator.ps1` is present, signed (when in a
-  release branch), and parses with no syntax errors
-- confirm every public-facing parameter on the orchestrator has a
-  corresponding documented entry in `.NOTES`
-- confirm no script in the tree contains `$PSScriptRoot` (see §3)
-- confirm every `.ps1` under `Tools\` has a matching test under
-  `Tests\Static\` or `Tests\Unit\`
-
-If the state checker reports missing paths, address that gap
-intentionally before proceeding with dependent work.
-
-The state checker itself is a Phase 0 deliverable; it must be the first
-script created when this rule set is adopted (see §5).
+A static test enforces the absence of the token across the tree.
 
 ---
 
-## 3. Do Not Use `$PSScriptRoot`
+## 3. Pester Coverage
 
-Do not use `$PSScriptRoot` anywhere in this project.
+Every script must have matching coverage in two categories at minimum:
 
-Use explicit parameters instead:
+- **Static** — script parses, required parameters present, no
+  `$PSScriptRoot`, every error category from §6 referenced in the
+  classifier, Authenticode signature present on release branches.
+- **Unit** — pure logic (LUN serial diff, time-skew math, hotfix-parity
+  diff, classification mapping) tested with mocked inputs, covering both
+  the success path and the handled-failure path.
 
-```powershell
-param(
-    [string]$ProjectRoot
-)
-```
+Integration and acceptance categories are added when the wrapped
+external cmdlets (§5) gain non-trivial behavior worth recording as
+fixtures.
 
-All scripts, tools, and Pester tests must use explicit paths or explicit
-`-ProjectRoot` parameters. The state checker enforces this with a
-forbidden-token static test.
-
----
-
-## 4. Pester Coverage Is Required
-
-Every script and helper function must have matching Pester coverage.
-
-Test categories required for this project:
-
-- **Static** — script parses, parameters present, no `$PSScriptRoot`,
-  required `.NOTES` sections present, Authenticode signature present
-  on release branches.
-- **Unit** — pure-logic functions (LUN serial diff, time-skew math,
-  hotfix-parity diff, error classification mapping) tested with mocked
-  inputs.
-- **Integration** — `Invoke-Command`, `Get-ClusterResource`,
-  `Test-WSMan`, `Get-MSDSMGlobalDefaultLoadBalancePolicy`, and
-  `Test-Cluster` are mocked; phases run end-to-end against fixtures.
-- **Acceptance** — full orchestrator runs against a recorded fixture
-  set producing the canonical Pass and Fail JSON artifacts.
-
-Tests must run independently and must validate both success paths and
-handled-failure paths. A test that only covers the happy path is
-incomplete.
+A test that only exercises the happy path is incomplete.
 
 ---
 
-## 5. Ordered Phase 0 Work
+## 4. Orchestrator Phase Contract
 
-Do not jump into the validation logic enhancements first. Build the
-Project Success Kit in this order:
+`Invoke-clusterValidator.ps1` executes phases in this order. Each phase
+appends structured records to the result accumulator and emits a
+phase-complete log line.
 
-1. `Tools\Test-ClvProjectState.ps1`
-2. `Tests\Static\Test-ClvProjectState.Tests.ps1`
-3. `Tools\New-ClvProjectScaffold.ps1`
-4. `ClusterValidator-Rules.md` (this document)
-5. `ClusterValidator-Roadmap.md` (already present)
-6. `docs\OUTSTANDING_QUESTIONS.md`
-7. `docs\RISK_REGISTER.md`
-8. `docs\PESTER_TEST_STRATEGY.md`
-9. `Tools\Invoke-ClvPester.ps1`
-10. Static tests for: required files, forbidden `$PSScriptRoot`, required
-    `.NOTES` sections, required parameters on the orchestrator, presence
-    of every error category from §10 in the orchestrator's classifier.
+1. PreFlight — modules + node reachability
+2. MPIO — global DSM claim
+3. Storage — per-node disk count + cross-node serial consistency
+4. SCSI3 — cluster reservation state
+5. Quorum — witness + quorum type *(roadmap Phase 2)*
+6. Heartbeat — cluster network thresholds *(roadmap Phase 2)*
+7. Time — W32Time skew *(roadmap Phase 2)*
+8. Reboot — pending-reboot detection *(roadmap Phase 2)*
+9. Hotfix — KB parity across nodes *(roadmap Phase 2)*
+10. ServiceAccount — FCI service account hygiene *(roadmap Phase 2)*
+11. TestCluster — Microsoft `Test-Cluster`
+12. Persist — JSON + HTML + transcript + Event Log
 
-Roadmap Phases 1-5 in `ClusterValidator-Roadmap.md` are blocked on
-Phase 0 completion.
-
----
-
-## 6. Explicit Project Structure
-
-The project must maintain this structure relative to the repository
-root:
-
-```text
-ScriptLibrary/
-├── Invoke-clusterValidator.ps1     # the orchestrator
-├── ClusterValidator-Rules.md
-├── ClusterValidator-Roadmap.md
-├── Tools/                          # atomic helper scripts
-├── Tests/
-│   ├── Static/
-│   ├── Unit/
-│   ├── Integration/
-│   └── Acceptance/
-├── docs/
-├── Config/                         # per-cluster JSON config files
-├── Examples/
-└── Runbooks/
-```
-
-Folders that do not yet exist must be created by
-`Tools\New-ClvProjectScaffold.ps1`, not by ad-hoc commits.
+Reordering or removing a phase requires a roadmap amendment and a
+matching static test update.
 
 ---
 
-## 7. Orchestrator Phase Contract
+## 5. External-Cmdlet Wrappers
 
-`Invoke-clusterValidator.ps1` must execute the following phases in
-order. Each phase appends structured records to the result accumulator
-and emits a phase-complete log line.
+High-blast-radius cmdlets are called from one place each, so they can
+be mocked uniformly in tests and hardened uniformly in production:
 
-1. PreFlight (modules + node reachability)
-2. MPIO (global DSM claim)
-3. Storage (per-node disk count + cross-node serial consistency)
-4. SCSI3 (cluster reservation state)
-5. Quorum (witness + quorum type) *— roadmap Phase 2*
-6. Heartbeat (cluster network thresholds) *— roadmap Phase 2*
-7. Time (W32Time skew) *— roadmap Phase 2*
-8. Reboot (pending-reboot detection) *— roadmap Phase 2*
-9. Hotfix (KB parity across nodes) *— roadmap Phase 2*
-10. ServiceAccount (FCI service account hygiene) *— roadmap Phase 2*
-11. TestCluster (Microsoft `Test-Cluster` invocation)
-12. Persist (write JSON + HTML + transcript; emit Event Log)
+- `Test-Cluster`        → `Invoke-ClvTestCluster`
+- `Invoke-Command`      → `Invoke-ClvRemote`
+- `Get-ClusterResource` → `Get-ClvClusterResource`
 
-Removing or reordering a phase requires a roadmap amendment and a
-matching Static test update.
+Direct calls outside the wrapper are rejected by a forbidden-call
+static test.
 
 ---
 
-## 8. External-Cmdlet Wrapper Rule
+## 6. Read-Only Discipline
 
-The following high-blast-radius cmdlets must be invoked **only** from a
-single private wrapper each, so they can be mocked in one place for
-Pester and so their parameters can be hardened uniformly:
-
-- `Test-Cluster`           → `Invoke-ClvTestCluster`
-- `Invoke-Command`         → `Invoke-ClvRemote`
-- `New-PSSession`          → `New-ClvNodeSession`
-- `Get-ClusterLog`         → `Invoke-ClvForensicCapture`
-- `Get-ClusterResource`    → `Get-ClvClusterResource`
-
-No other function may call these cmdlets directly. The state checker
-enforces this with a forbidden-call static test in
-`Tests\Static\Test-ClvWrapperDiscipline.Tests.ps1`.
-
----
-
-## 9. Read-Only Discipline
-
-The cluster validator is a diagnostic tool. It is forbidden from
-issuing any cmdlet that modifies cluster state, including but not
-limited to:
+The cluster validator is a diagnostic tool. It must not call any
+cluster-mutating cmdlet, including:
 
 - `Move-ClusterGroup`, `Move-ClusterSharedVolume`
-- `Stop-ClusterResource`, `Start-ClusterResource`
+- `Start-ClusterResource`, `Stop-ClusterResource`
 - `Set-ClusterParameter`, `Set-ClusterQuorum`
 - `Clear-ClusterDiskReservation`
-- Any `sg_persist`, `clusdiag`, or raw SCSI PR command
-- Any service control verb against cluster-relevant services
+- Raw SCSI PR commands (`sg_persist`, `clusdiag`, etc.)
+- Service control verbs against cluster-relevant services
 
-A static test enumerates these forbidden tokens and fails the build if
-any appear. Forensic capture (`Get-ClusterLog`) is read-only and
-explicitly allowed via its wrapper (§8).
-
----
-
-## 10. Error Classification Rule
-
-The orchestrator must classify every result with one of the following
-explicit categories. Free-text statuses and ad-hoc severity strings are
-not permitted.
-
-- `ConnectionError`            (WSMan / PSSession / DCOM failures)
-- `ModuleMissingError`         (FailoverClusters / MPIO / PowerCLI absent)
-- `PermissionDenied`           (insufficient rights on a node or share)
-- `StorageInventoryError`      (disk count diverges from `ExpectedDiskCount`)
-- `StorageTopologyError`       (LUN serial sets diverge across nodes)
-- `MpioConfigurationError`     (no global claim or wrong policy)
-- `ReservationConflict`        (SCSI-3 / cluster reservation state bad)
-- `QuorumStateError`           (witness offline, wrong quorum type)
-- `ClusterHeartbeatError`      (non-default thresholds, lost heartbeats)
-- `TimeSkewError`              (cross-node W32Time skew exceeds tolerance)
-- `HotfixParityError`          (KB level diverges across nodes)
-- `PendingRebootDetected`      (any node reports reboot pending)
-- `ServiceAccountError`        (LocalSystem or mismatched FCI service account)
-- `TestClusterFailure`         (Microsoft `Test-Cluster` reported a failure)
-- `ConfigurationError`         (bad parameter, missing config file key)
-- `HandledSkip`                (gating logic intentionally bypassed a phase)
-- `Unknown`                    (must be transient; any occurrence is a bug)
-
-Do not classify a missing module, an unreachable node, or an ACL
-problem as a storage or cluster fault. Misclassification masks the
-real signal in SIEM and is treated as a bug.
+A static test fails the build on any of those tokens. `Get-ClusterLog`
+is read-only and is the one allowed forensic-capture path, behind its
+wrapper.
 
 ---
 
-## 11. Artifact-First Auditability
+## 7. Error Classification
 
-Every run must produce a durable, structured artifact triad in
-`<ReportPath>`:
+Every result record uses exactly one of these categories. Free-text
+statuses and ad-hoc severity strings are rejected.
 
-- `ClusterValidation_<ts>.json`        — structured per-phase records
-- `ClusterValidation_<ts>.html`        — Microsoft `Test-Cluster` report
-- `ClusterValidation_<ts>_transcript.log` — full PowerShell transcript
+- `ConnectionError` — WSMan / PSSession / DCOM
+- `ModuleMissingError` — FailoverClusters / MPIO / PowerCLI absent
+- `PermissionDenied` — rights on a node or share
+- `StorageInventoryError` — disk count diverges from `ExpectedDiskCount`
+- `StorageTopologyError` — LUN serial sets diverge across nodes
+- `MpioConfigurationError` — no global claim or wrong policy
+- `ReservationConflict` — SCSI-3 / cluster reservation state bad
+- `QuorumStateError` — witness offline or wrong quorum type
+- `ClusterHeartbeatError` — non-default thresholds or lost heartbeats
+- `TimeSkewError` — cross-node W32Time skew exceeds tolerance
+- `HotfixParityError` — KB level diverges across nodes
+- `PendingRebootDetected` — any node reports reboot pending
+- `ServiceAccountError` — `LocalSystem` or mismatched FCI account
+- `TestClusterFailure` — Microsoft `Test-Cluster` reported a failure
+- `ConfigurationError` — bad parameter or missing config key
+- `HandledSkip` — gating logic intentionally bypassed a phase
+- `Unknown` — must be transient; any occurrence is a bug
 
-Operational and audit reporting must be based on these durable
-artifacts plus the Windows Event Log payload. Transient `Write-Host`
-output is for interactive operators only and must never be the
-authoritative record.
-
-A correlation GUID (roadmap Phase 1) ties all three artifacts and
-every Event Log record from a single run.
+A missing module, unreachable node, or ACL issue must never be filed as
+a storage or cluster fault. Misclassification masks SIEM signal and is
+treated as a bug.
 
 ---
 
-## 12. Change Discipline
+## 8. Artifact-First Auditability
 
-Before any new feature work:
+Every run produces a durable triad in `<ReportPath>`:
 
-1. run the state checker (§2)
-2. confirm the needed scaffold exists (§6)
-3. add or update the atomic script or function (§1)
-4. add or update the matching Pester coverage (§4)
-5. rerun the state checker and the relevant test category
-6. update `ClusterValidator-Roadmap.md` if a phase scope changes
+- `ClusterValidation_<ts>.json` — structured per-phase records
+- `ClusterValidation_<ts>.html` — `Test-Cluster` report
+- `ClusterValidation_<ts>_transcript.log` — full transcript
 
-This project favors small, verifiable steps over large unbounded
-changes. A commit that touches the orchestrator without a matching
-test commit (or in the same commit) will be rejected by the static
-suite.
+Audit and operational reporting are based on these artifacts plus the
+Windows Event Log payload. `Write-Host` output is for interactive
+operators only and is never the authoritative record. A correlation
+GUID (roadmap Phase 1) links all three artifacts and every Event Log
+record from a single run.
+
+---
+
+## 9. Change Discipline
+
+A change to the orchestrator ships in the same commit (or commit pair)
+as the matching test change. The progression is:
+
+1. Add or update the atomic script.
+2. Add or update its test.
+3. Run the affected test category locally.
+4. Update `ClusterValidator-Roadmap.md` if a phase's scope changes.
+
+Small, verifiable steps over large unbounded changes.
