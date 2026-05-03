@@ -4,6 +4,48 @@ All notable changes to the **ClusterValidator** module are documented
 here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.0] — 2026-05-03
+
+### Added
+
+- **Rules §7 enforcement.** `Add-ClvResult` gained an optional
+  `-Category` parameter validated against the §7 vocabulary
+  (`ConnectionError`, `ModuleMissingError`, `StorageInventoryError`,
+  `StorageTopologyError`, `MpioConfigurationError`,
+  `ReservationConflict`, `QuorumStateError`, `ClusterHeartbeatError`,
+  `TimeSkewError`, `HotfixParityError`, `PendingRebootDetected`,
+  `ServiceAccountError`, `TestClusterFailure`, `ConfigurationError`,
+  `PermissionDenied`, `HandledSkip`, `Unknown`).
+- **Runtime guard.** Every `Fail` or `Warn` record must specify a
+  category; the function throws at the call site if it's omitted.
+  `Pass` and `Info` records may still omit it.
+- **Result schema.** Records now carry a `Category` column alongside
+  `Status` so SIEM searches can filter by the category vocabulary
+  without parsing free-text `Message` fields.
+- **Console output.** Format changed from `[Status]` to
+  `[Status/Category]` when a category is present.
+- All 18 `Fail`/`Warn` call sites in `Invoke-ClusterValidator` tagged
+  with the appropriate category. Catch-all interrogation failures
+  inside per-phase `try` blocks are classified as `ConnectionError`
+  (per Rules §7: never misclassify a connection failure as a domain
+  fault).
+
+### Changed
+
+- Console line format: `[Status/Category] Phase :: Message` when a
+  category is present, `[Status] Phase :: Message` otherwise.
+
+### Tests
+
+- Static suite: AST scan asserts every `Add-ClvResult` call with
+  `Status='Fail'` or `'Warn'` carries a `-Category`. Catches new call
+  sites that forget the category.
+- Static suite: source must reference every domain category at least
+  once (smoke check that the vocabulary is actually used).
+- Unit suite: `Add-ClvResult` accepts categoryless `Pass`/`Info`,
+  rejects categoryless `Fail`/`Warn`, rejects unknown categories,
+  records the column when supplied.
+
 ## [1.0.0] — 2026-05-03
 
 First stable release. The validator started as a 37-line script and
@@ -77,10 +119,6 @@ shape.
 
 ### Known gaps
 
-- Result records still carry only `Pass | Warn | Fail | Info` status.
-  Rules §7 specifies a richer set of error categories
-  (`StorageInventoryError`, `ReservationConflict`, etc.) but those are
-  not yet surfaced as a structured field. Tracked for 1.1.0.
 - Code signing requires the internal PKI cert; the published build is
   unsigned for now. AllSigned hosts must trust the publisher chain
   before adopting.
@@ -89,6 +127,8 @@ shape.
 - GitHub Actions workflow assumes `windows-latest` runners can install
   the `Failover-Clustering` Windows feature; in restricted environments
   the unit suite may need to skip module-import tests.
+
+> Note: the 1.0.0 result-category gap is closed in 1.1.0 (see above).
 
 ### Notes
 

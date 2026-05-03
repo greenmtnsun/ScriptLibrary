@@ -1,6 +1,6 @@
 @{
     RootModule        = 'ClusterValidator.psm1'
-    ModuleVersion     = '1.0.0'
+    ModuleVersion     = '1.1.0'
     GUID              = 'b836e54f-ed7b-48a0-b3ce-fa369678f13d'
     Author            = 'ScriptLibrary maintainers'
     CompanyName       = 'GreenMtnSun'
@@ -23,7 +23,7 @@
         PSData = @{
             Tags         = @('Cluster', 'Validation', 'SQL', 'FCI', 'SAN', 'SCSI3', 'MPIO')
             ProjectUri   = 'https://github.com/greenmtnsun/scriptlibrary'
-            ReleaseNotes = 'Initial module release. Feature parity with the prior single-script form (roadmap phases 1-4 complete: audit/observability, validation depth, security hardening, scale and config-driven runs).'
+            ReleaseNotes = '1.1.0 - Rules §7 error-category vocabulary now enforced on every Fail/Warn record. Add-ClvResult gained a -Category parameter validated against the §7 list; uncategorized Fail/Warn calls throw at the call site. Records now carry a Category column for SIEM filtering.'
         }
     }
 }

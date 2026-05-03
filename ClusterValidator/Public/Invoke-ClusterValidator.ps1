@@ -214,7 +214,7 @@ function Invoke-ClusterValidator {
             if (Get-Module -ListAvailable -Name $mod) {
                 Add-ClvResult -Phase 'PreFlight' -Status 'Pass' -Message "Module '$mod' available."
             } else {
-                Add-ClvResult -Phase 'PreFlight' -Status 'Fail' -Message "Module '$mod' missing."
+                Add-ClvResult -Phase 'PreFlight' -Status 'Fail' -Category 'ModuleMissingError' -Message "Module '$mod' missing."
             }
         }
 
@@ -224,7 +224,7 @@ function Invoke-ClusterValidator {
                 Add-ClvResult -Phase 'PreFlight' -Status 'Pass' -Message "WSMan reachable on $node."
                 $node
             } catch {
-                Add-ClvResult -Phase 'PreFlight' -Status 'Fail' `
+                Add-ClvResult -Phase 'PreFlight' -Status 'Fail' -Category 'ConnectionError' `
                     -Message "WSMan unreachable on $node ($($_.Exception.Message))."
             }
         }
@@ -257,7 +257,7 @@ function Invoke-ClusterValidator {
                 $script:nodeSessions[$node] = New-PSSession @sessionParams
                 Add-ClvResult -Phase 'PreFlight' -Status 'Pass' -Message "PSSession opened to $node."
             } catch {
-                Add-ClvResult -Phase 'PreFlight' -Status 'Fail' `
+                Add-ClvResult -Phase 'PreFlight' -Status 'Fail' -Category 'ConnectionError' `
                     -Message "PSSession failed for $node ($($_.Exception.Message))."
             }
         }
@@ -273,7 +273,7 @@ function Invoke-ClusterValidator {
         try {
             $mpioPolicy = Get-MSDSMGlobalDefaultLoadBalancePolicy -ErrorAction Stop
             if ([string]::IsNullOrWhiteSpace($mpioPolicy) -or $mpioPolicy -eq 'None') {
-                Add-ClvResult -Phase 'MPIO' -Status 'Warn' `
+                Add-ClvResult -Phase 'MPIO' -Status 'Warn' -Category 'MpioConfigurationError' `
                     -Message 'No global MPIO load-balance policy is set; multipath LUNs may surface as duplicate disks.' `
                     -Data @{ Policy = $mpioPolicy }
             } else {
@@ -282,7 +282,8 @@ function Invoke-ClusterValidator {
                     -Data @{ Policy = $mpioPolicy }
             }
         } catch {
-            Add-ClvResult -Phase 'MPIO' -Status 'Warn' -Message "MPIO interrogation failed: $($_.Exception.Message)"
+            Add-ClvResult -Phase 'MPIO' -Status 'Warn' -Category 'ConnectionError' `
+                -Message "MPIO interrogation failed: $($_.Exception.Message)"
         }
 
         # -------------------------------------------------------------------
@@ -304,7 +305,7 @@ function Invoke-ClusterValidator {
                         -Message "$($remote.ComputerName) sees $($remote.Count) shared disks (expected $ExpectedDiskCount)." `
                         -Data $remote
                 } else {
-                    Add-ClvResult -Phase 'Storage' -Status 'Fail' `
+                    Add-ClvResult -Phase 'Storage' -Status 'Fail' -Category 'StorageInventoryError' `
                         -Message "$($remote.ComputerName) sees $($remote.Count) shared disks (expected $ExpectedDiskCount)." `
                         -Data $remote
                 }
@@ -315,12 +316,12 @@ function Invoke-ClusterValidator {
             if (@($serialSets).Count -le 1) {
                 Add-ClvResult -Phase 'Storage' -Status 'Pass' -Message 'All reachable nodes report an identical LUN serial set.'
             } else {
-                Add-ClvResult -Phase 'Storage' -Status 'Fail' `
+                Add-ClvResult -Phase 'Storage' -Status 'Fail' -Category 'StorageTopologyError' `
                     -Message 'Nodes report divergent LUN serial sets; verify SAN zoning and host masking.' `
                     -Data @{ DistinctSets = @($serialSets).Count }
             }
         } catch {
-            Add-ClvResult -Phase 'Storage' -Status 'Fail' `
+            Add-ClvResult -Phase 'Storage' -Status 'Fail' -Category 'ConnectionError' `
                 -Message "Storage interrogation failed: $($_.Exception.Message)"
         }
 
@@ -338,19 +339,19 @@ function Invoke-ClusterValidator {
                             -Data $cd
                     }
                     'Failed' {
-                        Add-ClvResult -Phase 'SCSI3' -Status 'Fail' `
+                        Add-ClvResult -Phase 'SCSI3' -Status 'Fail' -Category 'ReservationConflict' `
                             -Message "$($cd.Name) Failed; probable SCSI-3 reservation conflict or fencing failure." `
                             -Data $cd
                     }
                     default {
-                        Add-ClvResult -Phase 'SCSI3' -Status 'Warn' `
+                        Add-ClvResult -Phase 'SCSI3' -Status 'Warn' -Category 'ReservationConflict' `
                             -Message "$($cd.Name) state=$($cd.State) on $($cd.OwnerNode); investigate." `
                             -Data $cd
                     }
                 }
             }
         } catch {
-            Add-ClvResult -Phase 'SCSI3' -Status 'Fail' `
+            Add-ClvResult -Phase 'SCSI3' -Status 'Fail' -Category 'ConnectionError' `
                 -Message "Cluster reservation interrogation failed: $($_.Exception.Message)"
         }
 
@@ -369,11 +370,11 @@ function Invoke-ClusterValidator {
             }
 
             if ($ExpectedQuorumType -and $quorum.QuorumType -ne $ExpectedQuorumType) {
-                Add-ClvResult -Phase 'Quorum' -Status 'Fail' `
+                Add-ClvResult -Phase 'Quorum' -Status 'Fail' -Category 'QuorumStateError' `
                     -Message "Quorum type is $($quorum.QuorumType); expected $ExpectedQuorumType." `
                     -Data $quorum
             } elseif ($quorum.QuorumResource -and $quorum.ResourceState -ne 'Online') {
-                Add-ClvResult -Phase 'Quorum' -Status 'Fail' `
+                Add-ClvResult -Phase 'Quorum' -Status 'Fail' -Category 'QuorumStateError' `
                     -Message "Quorum witness '$($quorum.QuorumResource)' state=$($quorum.ResourceState)." `
                     -Data $quorum
             } else {
@@ -382,7 +383,7 @@ function Invoke-ClusterValidator {
                     -Data $quorum
             }
         } catch {
-            Add-ClvResult -Phase 'Quorum' -Status 'Fail' `
+            Add-ClvResult -Phase 'Quorum' -Status 'Fail' -Category 'ConnectionError' `
                 -Message "Quorum interrogation failed: $($_.Exception.Message)"
         }
 
@@ -398,7 +399,7 @@ function Invoke-ClusterValidator {
                     RouteHistoryLength
             }
             if ($hb.SameSubnetThreshold -lt 10 -or $hb.CrossSubnetThreshold -lt 20) {
-                Add-ClvResult -Phase 'Heartbeat' -Status 'Warn' `
+                Add-ClvResult -Phase 'Heartbeat' -Status 'Warn' -Category 'ClusterHeartbeatError' `
                     -Message "Heartbeat thresholds below default (Same=$($hb.SameSubnetThreshold), Cross=$($hb.CrossSubnetThreshold))." `
                     -Data $hb
             } else {
@@ -407,7 +408,7 @@ function Invoke-ClusterValidator {
                     -Data $hb
             }
         } catch {
-            Add-ClvResult -Phase 'Heartbeat' -Status 'Warn' `
+            Add-ClvResult -Phase 'Heartbeat' -Status 'Warn' -Category 'ConnectionError' `
                 -Message "Heartbeat config interrogation failed: $($_.Exception.Message)"
         }
 
@@ -423,10 +424,10 @@ function Invoke-ClusterValidator {
             }
             $skewReport = Get-ClvTimeSkew -Samples $samples
             if ($null -eq $skewReport.Skew) {
-                Add-ClvResult -Phase 'Time' -Status 'Warn' `
+                Add-ClvResult -Phase 'Time' -Status 'Warn' -Category 'TimeSkewError' `
                     -Message "Insufficient time samples to evaluate skew (got $($skewReport.SampleCount))."
             } elseif ($skewReport.Skew -gt $TimeSkewToleranceSeconds) {
-                Add-ClvResult -Phase 'Time' -Status 'Fail' `
+                Add-ClvResult -Phase 'Time' -Status 'Fail' -Category 'TimeSkewError' `
                     -Message "Cross-node time skew is $($skewReport.Skew)s; tolerance is ${TimeSkewToleranceSeconds}s." `
                     -Data $skewReport
             } else {
@@ -435,7 +436,7 @@ function Invoke-ClusterValidator {
                     -Data $skewReport
             }
         } catch {
-            Add-ClvResult -Phase 'Time' -Status 'Warn' `
+            Add-ClvResult -Phase 'Time' -Status 'Warn' -Category 'ConnectionError' `
                 -Message "Time interrogation failed: $($_.Exception.Message)"
         }
 
@@ -460,7 +461,7 @@ function Invoke-ClusterValidator {
             }
             foreach ($n in $reboots) {
                 if ($n.Reasons.Count -gt 0) {
-                    Add-ClvResult -Phase 'Reboot' -Status 'Fail' `
+                    Add-ClvResult -Phase 'Reboot' -Status 'Fail' -Category 'PendingRebootDetected' `
                         -Message "$($n.ComputerName) has pending reboot ($($n.Reasons -join ', '))." `
                         -Data $n
                 } else {
@@ -470,7 +471,7 @@ function Invoke-ClusterValidator {
                 }
             }
         } catch {
-            Add-ClvResult -Phase 'Reboot' -Status 'Warn' `
+            Add-ClvResult -Phase 'Reboot' -Status 'Warn' -Category 'ConnectionError' `
                 -Message "Reboot interrogation failed: $($_.Exception.Message)"
         }
 
@@ -486,14 +487,14 @@ function Invoke-ClusterValidator {
             }
             $driftReport = Get-ClvHotFixDrift -Reports $hotfixes
             if ($driftReport.Drift.Count -gt 0) {
-                Add-ClvResult -Phase 'Hotfix' -Status 'Warn' `
+                Add-ClvResult -Phase 'Hotfix' -Status 'Warn' -Category 'HotfixParityError' `
                     -Message 'Hotfix drift detected across nodes.' -Data $driftReport.Drift
             } else {
                 Add-ClvResult -Phase 'Hotfix' -Status 'Pass' `
                     -Message "All nodes share an identical KB level ($($driftReport.AllKbCount) KBs)."
             }
         } catch {
-            Add-ClvResult -Phase 'Hotfix' -Status 'Warn' `
+            Add-ClvResult -Phase 'Hotfix' -Status 'Warn' -Category 'ConnectionError' `
                 -Message "Hotfix interrogation failed: $($_.Exception.Message)"
         }
 
@@ -509,14 +510,14 @@ function Invoke-ClusterValidator {
             }
             $issues = Get-ClvServiceAccountIssues -Reports $svcAccounts
             if (@($issues).Count -gt 0) {
-                Add-ClvResult -Phase 'ServiceAccount' -Status 'Warn' `
+                Add-ClvResult -Phase 'ServiceAccount' -Status 'Warn' -Category 'ServiceAccountError' `
                     -Message 'Service account hygiene issues detected.' -Data $issues
             } else {
                 Add-ClvResult -Phase 'ServiceAccount' -Status 'Pass' `
                     -Message 'All cluster/SQL service accounts are uniform and non-builtin.'
             }
         } catch {
-            Add-ClvResult -Phase 'ServiceAccount' -Status 'Warn' `
+            Add-ClvResult -Phase 'ServiceAccount' -Status 'Warn' -Category 'ConnectionError' `
                 -Message "ServiceAccount interrogation failed: $($_.Exception.Message)"
         }
 
@@ -535,7 +536,7 @@ function Invoke-ClusterValidator {
                 -Message "Test-Cluster completed; HTML report at $htmlReport." `
                 -Data @{ ReportPath = $htmlReport; Included = $IncludeTests; Excluded = $ExcludeTests }
         } catch {
-            Add-ClvResult -Phase 'TestCluster' -Status 'Fail' `
+            Add-ClvResult -Phase 'TestCluster' -Status 'Fail' -Category 'TestClusterFailure' `
                 -Message "Test-Cluster failed: $($_.Exception.Message)"
         }
 
@@ -548,7 +549,7 @@ function Invoke-ClusterValidator {
                 Add-ClvResult -Phase 'Forensic' -Status 'Info' `
                     -Message "Cluster log captured to $ReportPath (last $ForensicCaptureMinutes minutes)."
             } catch {
-                Add-ClvResult -Phase 'Forensic' -Status 'Warn' `
+                Add-ClvResult -Phase 'Forensic' -Status 'Warn' -Category 'ConnectionError' `
                     -Message "Cluster log capture failed: $($_.Exception.Message)"
             }
         } else {

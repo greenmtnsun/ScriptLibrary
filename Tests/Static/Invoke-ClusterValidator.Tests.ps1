@@ -247,6 +247,75 @@ Describe 'ClusterValidator module - Static' {
         }
     }
 
+    Context 'Rules §7 - Error Category Enforcement (1.1.0)' {
+        It 'Add-ClvResult declares a [ValidateSet] -Category parameter' {
+            $addResultPath = Join-Path $script:ModuleRoot 'Private\Add-ClvResult.ps1'
+            $text = Get-Content $addResultPath -Raw
+            $text | Should -Match '\[ValidateSet\(\s*''ConnectionError'''
+            $text | Should -Match '\[string\]\$Category'
+        }
+
+        It 'Add-ClvResult throws when Status=Fail|Warn and -Category is omitted' {
+            $addResultPath = Join-Path $script:ModuleRoot 'Private\Add-ClvResult.ps1'
+            $text = Get-Content $addResultPath -Raw
+            $text | Should -Match 'Status\s+-in\s+''Fail'',\s*''Warn''\s+-and\s+-not\s+\$Category'
+        }
+
+        It 'every domain category from Rules §7 appears at least once in the orchestrator' {
+            # Smoke check that the source actually exercises the vocabulary
+            # we claim to enforce. ConnectionError, ConfigurationError,
+            # HandledSkip, Unknown, and PermissionDenied are excluded —
+            # they're catch-all / cross-cutting categories not tied to a
+            # specific domain phase.
+            $domain = @(
+                'ModuleMissingError',
+                'StorageInventoryError',
+                'StorageTopologyError',
+                'MpioConfigurationError',
+                'ReservationConflict',
+                'QuorumStateError',
+                'ClusterHeartbeatError',
+                'TimeSkewError',
+                'PendingRebootDetected',
+                'HotfixParityError',
+                'ServiceAccountError',
+                'TestClusterFailure'
+            )
+            foreach ($cat in $domain) {
+                $script:OrchestratorText | Should -Match "(?<![\w])$cat(?![\w])" `
+                    -Because "Rules §7 category '$cat' must appear at a Fail/Warn call site"
+            }
+        }
+
+        It 'every Fail/Warn call site in the orchestrator carries a -Category (AST scan)' {
+            $calls = $script:Ast.FindAll({
+                param($n)
+                $n -is [System.Management.Automation.Language.CommandAst] -and
+                $n.GetCommandName() -eq 'Add-ClvResult'
+            }, $true)
+
+            $offenders = foreach ($call in $calls) {
+                # Walk the command elements to extract -Status / -Category
+                $elements = $call.CommandElements
+                $status   = $null
+                $hasCategory = $false
+                for ($i = 1; $i -lt $elements.Count - 1; $i++) {
+                    $e = $elements[$i]
+                    if ($e -is [System.Management.Automation.Language.CommandParameterAst]) {
+                        switch ($e.ParameterName) {
+                            'Status'   { $status = $elements[$i + 1].Value }
+                            'Category' { $hasCategory = $true }
+                        }
+                    }
+                }
+                if ($status -in 'Fail','Warn' -and -not $hasCategory) {
+                    "$($call.Extent.File):$($call.Extent.StartLineNumber)"
+                }
+            }
+            $offenders | Should -BeNullOrEmpty -Because 'Rules §7: Fail and Warn require -Category'
+        }
+    }
+
     Context 'Roadmap Phase 4 - Scale & Operability' {
         It 'exposes -ConfigPath' {
             $paramNames = $script:FunctionAst.Body.ParamBlock.Parameters.Name.VariablePath.UserPath

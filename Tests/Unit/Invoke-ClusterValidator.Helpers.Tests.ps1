@@ -168,6 +168,62 @@ Describe 'ClusterValidator helpers - Unit' {
     }
 }
 
+Describe 'Add-ClvResult - Category enforcement (Rules §7, 1.1.0)' {
+
+    BeforeEach {
+        # Reset the module's accumulator before each test so assertions
+        # don't leak state across cases.
+        InModuleScope ClusterValidator {
+            $script:correlationId = [guid]::NewGuid().ToString()
+            $script:results       = [System.Collections.Generic.List[object]]::new()
+        }
+    }
+
+    It 'accepts a Pass record without -Category' {
+        InModuleScope ClusterValidator {
+            { Add-ClvResult -Phase 'Test' -Status 'Pass' -Message 'ok' } | Should -Not -Throw
+            $script:results[0].Category | Should -BeNullOrEmpty
+            $script:results[0].Status   | Should -Be 'Pass'
+        }
+    }
+
+    It 'accepts an Info record without -Category' {
+        InModuleScope ClusterValidator {
+            { Add-ClvResult -Phase 'Test' -Status 'Info' -Message 'fyi' } | Should -Not -Throw
+        }
+    }
+
+    It 'throws when Status=Fail and -Category is omitted' {
+        InModuleScope ClusterValidator {
+            { Add-ClvResult -Phase 'Test' -Status 'Fail' -Message 'bad' } |
+                Should -Throw -ExpectedMessage '*requires -Category*'
+        }
+    }
+
+    It 'throws when Status=Warn and -Category is omitted' {
+        InModuleScope ClusterValidator {
+            { Add-ClvResult -Phase 'Test' -Status 'Warn' -Message 'meh' } |
+                Should -Throw -ExpectedMessage '*requires -Category*'
+        }
+    }
+
+    It 'rejects an unknown -Category via [ValidateSet]' {
+        InModuleScope ClusterValidator {
+            { Add-ClvResult -Phase 'Test' -Status 'Fail' -Category 'MadeUpCategory' -Message 'x' } |
+                Should -Throw
+        }
+    }
+
+    It 'records the Category column on a successful Fail call' {
+        InModuleScope ClusterValidator {
+            Add-ClvResult -Phase 'Storage' -Status 'Fail' `
+                          -Category 'StorageInventoryError' `
+                          -Message 'x'
+            $script:results[0].Category | Should -Be 'StorageInventoryError'
+        }
+    }
+}
+
 Describe 'ClusterValidator module - Loader' {
     It 'exports exactly Invoke-ClusterValidator' {
         $exports = (Get-Module ClusterValidator).ExportedFunctions.Keys
