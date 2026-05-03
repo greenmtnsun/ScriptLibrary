@@ -1,0 +1,55 @@
+name: Pester
+
+on:
+  push:
+    branches:
+      - main
+      - 'claude/*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  static-and-unit:
+    name: Static + Unit
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pester 5.x
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable Pester | Where-Object Version -ge '5.0.0')) {
+            Install-Module Pester -MinimumVersion 5.0.0 `
+                                  -Force -SkipPublisherCheck -Scope CurrentUser
+          }
+          Get-Module -ListAvailable Pester | Select-Object Name, Version
+
+      - name: Install Failover-Clustering feature (best-effort)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # The unit suite imports the ClusterValidator module, whose
+          # manifest declares FailoverClusters as a RequiredModule. On
+          # most windows-latest runners this feature is not pre-installed.
+          # We attempt the install but do not fail the workflow if the
+          # runner image does not support it - the static suite still
+          # runs without it.
+          try {
+            Install-WindowsFeature -Name Failover-Clustering -IncludeManagementTools -ErrorAction Stop
+          } catch {
+            Write-Warning "Failover-Clustering install failed: $($_.Exception.Message). Unit suite may skip module-import tests."
+          }
+
+      - name: Static suite
+        shell: pwsh
+        run: |
+          .\Tools\Invoke-ClvPester.ps1 -ProjectRoot $PWD.Path -Category Static
+
+      - name: Unit suite
+        shell: pwsh
+        run: |
+          .\Tools\Invoke-ClvPester.ps1 -ProjectRoot $PWD.Path -Category Unit

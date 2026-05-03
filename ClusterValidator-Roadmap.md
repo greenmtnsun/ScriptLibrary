@@ -15,8 +15,8 @@ acceptance criteria.
 | 1 Audit & Observability | ✅ done | correlation GUID, transcript, WSMan, reusable PSSessions |
 | 2 Validation Depth | ✅ done | 6 new phases + Forensic capture |
 | 3 Security Hardening | ✅ done | CLM preflight, SecretManagement, ACL hardening |
-| 4 Scale & Operability | ✅ done (partial) | ConfigPath, parallel Storage, pure helpers, Pester unit suite. Deferred: GitHub Actions wiring, optional PowerCLI VMware check |
-| 5 Release & Fleet Rollout | ⏳ next | tag, signed package, distribution, dashboard, runbook |
+| 4 Scale & Operability | ✅ done (partial) | ConfigPath, parallel Storage, pure helpers, Pester unit suite. Deferred: optional PowerCLI VMware check |
+| 5 Release & Fleet Rollout | ✅ done (partial) | v1.0.0 tag, CHANGELOG, RUNBOOK, SQL Agent job installer, GitHub Actions Pester workflow. Deferred (require external infra): signed-package distribution, SIEM dashboard, deployment vehicle (DSC/SCCM/Ansible) |
 
 Module promotion (Rules §10) **fired** at the end of Phase 4. Code now
 ships as the **ClusterValidator** module under `.\ClusterValidator\`.
