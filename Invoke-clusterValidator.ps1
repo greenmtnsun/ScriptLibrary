@@ -78,6 +78,16 @@ param(
     [ValidateRange(5, 120)]
     [int]$OpenTimeoutSeconds = 30,
 
+    [ValidateSet('NodeMajority', 'NodeAndDiskMajority', 'NodeAndFileShareMajority',
+                 'NodeAndCloudMajority', 'DiskOnly', '')]
+    [string]$ExpectedQuorumType = '',
+
+    [ValidateRange(0.1, 60.0)]
+    [double]$TimeSkewToleranceSeconds = 2.0,
+
+    [ValidateRange(5, 1440)]
+    [int]$ForensicCaptureMinutes = 60,
+
     [switch]$WriteEventLog,
 
     [string]$EventLogName = 'Application',
@@ -123,12 +133,22 @@ function Add-Result {
 # is invoked from exactly one place so it can be mocked uniformly in
 # tests and hardened uniformly in production.
 function Invoke-ClvRemote {
+    [CmdletBinding(DefaultParameterSetName = 'Single')]
     param(
-        [Parameter(Mandatory)] [System.Management.Automation.Runspaces.PSSession]$Session,
+        [Parameter(Mandatory, ParameterSetName = 'Single')]
+        [System.Management.Automation.Runspaces.PSSession]$Session,
+
+        [Parameter(Mandatory, ParameterSetName = 'Many')]
+        [System.Management.Automation.Runspaces.PSSession[]]$Sessions,
+
         [Parameter(Mandatory)] [scriptblock]$ScriptBlock,
         [object[]]$ArgumentList
     )
-    Invoke-Command -Session $Session -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList -ErrorAction Stop
+    if ($PSCmdlet.ParameterSetName -eq 'Many') {
+        Invoke-Command -Session $Sessions -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList -ErrorAction Stop
+    } else {
+        Invoke-Command -Session $Session  -ScriptBlock $ScriptBlock -ArgumentList $ArgumentList -ErrorAction Stop
+    }
 }
 
 function Invoke-ClvTestCluster {
@@ -303,6 +323,220 @@ try {
     }
 
     # -----------------------------------------------------------------------
+    # Phase 5: Quorum - witness state and quorum type
+    # -----------------------------------------------------------------------
+    try {
+        $quorum = Invoke-ClvRemote -Session $nodeSessions[$sessionNodes[0]] -ScriptBlock {
+            Import-Module FailoverClusters -ErrorAction Stop
+            $q = Get-ClusterQuorum
+            [pscustomobject]@{
+                QuorumType     = "$($q.QuorumType)"
+                QuorumResource = if ($q.QuorumResource) { $q.QuorumResource.Name }  else { $null }
+                ResourceState  = if ($q.QuorumResource) { "$($q.QuorumResource.State)" } else { $null }
+            }
+        }
+
+        if ($ExpectedQuorumType -and $quorum.QuorumType -ne $ExpectedQuorumType) {
+            Add-Result -Phase 'Quorum' -Status 'Fail' `
+                -Message "Quorum type is $($quorum.QuorumType); expected $ExpectedQuorumType." `
+                -Data $quorum
+        } elseif ($quorum.QuorumResource -and $quorum.ResourceState -ne 'Online') {
+            Add-Result -Phase 'Quorum' -Status 'Fail' `
+                -Message "Quorum witness '$($quorum.QuorumResource)' state=$($quorum.ResourceState)." `
+                -Data $quorum
+        } else {
+            Add-Result -Phase 'Quorum' -Status 'Pass' `
+                -Message "Quorum type=$($quorum.QuorumType); witness='$($quorum.QuorumResource)' is healthy." `
+                -Data $quorum
+        }
+    } catch {
+        Add-Result -Phase 'Quorum' -Status 'Fail' `
+            -Message "Quorum interrogation failed: $($_.Exception.Message)"
+    }
+
+    # -----------------------------------------------------------------------
+    # Phase 6: Heartbeat - cluster network thresholds
+    # -----------------------------------------------------------------------
+    try {
+        $hb = Invoke-ClvRemote -Session $nodeSessions[$sessionNodes[0]] -ScriptBlock {
+            Import-Module FailoverClusters -ErrorAction Stop
+            Get-Cluster | Select-Object Name,
+                SameSubnetThreshold,  SameSubnetDelay,
+                CrossSubnetThreshold, CrossSubnetDelay,
+                RouteHistoryLength
+        }
+        # Server 2016+ defaults: Same=10/1000ms, Cross=20/1000ms, Route=10
+        # Below-default thresholds make the cluster sensitive to transient
+        # network blips and cause spurious failovers.
+        if ($hb.SameSubnetThreshold -lt 10 -or $hb.CrossSubnetThreshold -lt 20) {
+            Add-Result -Phase 'Heartbeat' -Status 'Warn' `
+                -Message "Heartbeat thresholds below default (Same=$($hb.SameSubnetThreshold), Cross=$($hb.CrossSubnetThreshold))." `
+                -Data $hb
+        } else {
+            Add-Result -Phase 'Heartbeat' -Status 'Pass' `
+                -Message "Heartbeat thresholds at or above default (Same=$($hb.SameSubnetThreshold), Cross=$($hb.CrossSubnetThreshold))." `
+                -Data $hb
+        }
+    } catch {
+        Add-Result -Phase 'Heartbeat' -Status 'Warn' `
+            -Message "Heartbeat config interrogation failed: $($_.Exception.Message)"
+    }
+
+    # -----------------------------------------------------------------------
+    # Phase 7: Time - cross-node W32Time skew
+    # -----------------------------------------------------------------------
+    try {
+        $samples = Invoke-ClvRemote -Sessions @($nodeSessions.Values) -ScriptBlock {
+            [pscustomobject]@{
+                ComputerName = $env:COMPUTERNAME
+                UtcNow       = (Get-Date).ToUniversalTime()
+            }
+        }
+        $valid = @($samples | Where-Object { $_.UtcNow })
+        if ($valid.Count -ge 2) {
+            $min  = ($valid.UtcNow | Measure-Object -Minimum).Minimum
+            $max  = ($valid.UtcNow | Measure-Object -Maximum).Maximum
+            $skew = [math]::Round(($max - $min).TotalSeconds, 3)
+            if ($skew -gt $TimeSkewToleranceSeconds) {
+                Add-Result -Phase 'Time' -Status 'Fail' `
+                    -Message "Cross-node time skew is ${skew}s; tolerance is ${TimeSkewToleranceSeconds}s." `
+                    -Data $valid
+            } else {
+                Add-Result -Phase 'Time' -Status 'Pass' `
+                    -Message "Cross-node time skew is ${skew}s (within ${TimeSkewToleranceSeconds}s)." `
+                    -Data $valid
+            }
+        } else {
+            Add-Result -Phase 'Time' -Status 'Warn' `
+                -Message 'Insufficient time samples to evaluate skew.'
+        }
+    } catch {
+        Add-Result -Phase 'Time' -Status 'Warn' `
+            -Message "Time interrogation failed: $($_.Exception.Message)"
+    }
+
+    # -----------------------------------------------------------------------
+    # Phase 8: Reboot - pending-reboot detection on every node
+    # -----------------------------------------------------------------------
+    try {
+        $reboots = Invoke-ClvRemote -Sessions @($nodeSessions.Values) -ScriptBlock {
+            $reasons = [System.Collections.Generic.List[string]]::new()
+            if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
+                $reasons.Add('CBS')
+            }
+            if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
+                $reasons.Add('WindowsUpdate')
+            }
+            $sm = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' `
+                -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
+            if ($sm.PendingFileRenameOperations) {
+                $reasons.Add('PendingFileRenameOperations')
+            }
+            [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Reasons = $reasons.ToArray() }
+        }
+        foreach ($n in $reboots) {
+            if ($n.Reasons.Count -gt 0) {
+                Add-Result -Phase 'Reboot' -Status 'Fail' `
+                    -Message "$($n.ComputerName) has pending reboot ($($n.Reasons -join ', '))." `
+                    -Data $n
+            } else {
+                Add-Result -Phase 'Reboot' -Status 'Pass' `
+                    -Message "$($n.ComputerName) has no pending reboot." `
+                    -Data $n
+            }
+        }
+    } catch {
+        Add-Result -Phase 'Reboot' -Status 'Warn' `
+            -Message "Reboot interrogation failed: $($_.Exception.Message)"
+    }
+
+    # -----------------------------------------------------------------------
+    # Phase 9: Hotfix - KB parity across nodes
+    # -----------------------------------------------------------------------
+    try {
+        $hotfixes = Invoke-ClvRemote -Sessions @($nodeSessions.Values) -ScriptBlock {
+            [pscustomobject]@{
+                ComputerName = $env:COMPUTERNAME
+                HotFixIDs    = @(Get-HotFix | Sort-Object HotFixID | Select-Object -ExpandProperty HotFixID)
+            }
+        }
+        $allKbs = $hotfixes.HotFixIDs | Sort-Object -Unique
+        $drift = foreach ($n in $hotfixes) {
+            $absent = @($allKbs | Where-Object { $_ -notin $n.HotFixIDs })
+            if ($absent.Count -gt 0) {
+                [pscustomobject]@{ ComputerName = $n.ComputerName; Missing = $absent }
+            }
+        }
+        if ($drift) {
+            Add-Result -Phase 'Hotfix' -Status 'Warn' `
+                -Message 'Hotfix drift detected across nodes.' -Data $drift
+        } else {
+            $kbCount = @($allKbs).Count
+            Add-Result -Phase 'Hotfix' -Status 'Pass' `
+                -Message "All nodes share an identical KB level ($kbCount KBs)."
+        }
+    } catch {
+        Add-Result -Phase 'Hotfix' -Status 'Warn' `
+            -Message "Hotfix interrogation failed: $($_.Exception.Message)"
+    }
+
+    # -----------------------------------------------------------------------
+    # Phase 10: ServiceAccount - Cluster + SQL service account hygiene
+    # -----------------------------------------------------------------------
+    try {
+        $svcAccounts = Invoke-ClvRemote -Sessions @($nodeSessions.Values) -ScriptBlock {
+            $svcs = Get-CimInstance -ClassName Win32_Service `
+                -Filter "Name='ClusSvc' OR Name LIKE 'MSSQL%' OR Name LIKE 'SQLAgent%'" |
+                Select-Object Name, StartName, State
+            [pscustomobject]@{ ComputerName = $env:COMPUTERNAME; Services = $svcs }
+        }
+        $builtIn = @('LocalSystem', 'NT AUTHORITY\LocalService', 'NT AUTHORITY\NetworkService')
+        $issues = New-Object System.Collections.Generic.List[object]
+
+        foreach ($n in $svcAccounts) {
+            foreach ($svc in $n.Services) {
+                if ($svc.StartName -in $builtIn) {
+                    $issues.Add([pscustomobject]@{
+                        ComputerName = $n.ComputerName
+                        Service      = $svc.Name
+                        StartName    = $svc.StartName
+                        Issue        = 'BuiltInAccount'
+                    })
+                }
+            }
+        }
+
+        $serviceMap = @{}
+        foreach ($n in $svcAccounts) {
+            foreach ($svc in $n.Services) {
+                if (-not $serviceMap.ContainsKey($svc.Name)) { $serviceMap[$svc.Name] = @{} }
+                $serviceMap[$svc.Name][$n.ComputerName] = $svc.StartName
+            }
+        }
+        foreach ($svcName in $serviceMap.Keys) {
+            $accounts = $serviceMap[$svcName].Values | Sort-Object -Unique
+            if (@($accounts).Count -gt 1) {
+                $issues.Add([pscustomobject]@{
+                    Service  = $svcName
+                    Accounts = $serviceMap[$svcName]
+                    Issue    = 'AccountMismatch'
+                })
+            }
+        }
+
+        if ($issues.Count -gt 0) {
+            Add-Result -Phase 'ServiceAccount' -Status 'Warn' `
+                -Message 'Service account hygiene issues detected.' -Data $issues
+        } else {
+            Add-Result -Phase 'ServiceAccount' -Status 'Pass' `
+                -Message 'All cluster/SQL service accounts are uniform and non-builtin.'
+        }
+    } catch {
+        Add-Result -Phase 'ServiceAccount' -Status 'Warn' `
+            -Message "ServiceAccount interrogation failed: $($_.Exception.Message)"
+    }
+
+    # -----------------------------------------------------------------------
     # Phase 11: TestCluster - Microsoft validation suite
     # -----------------------------------------------------------------------
     Write-Host ''
@@ -322,7 +556,24 @@ try {
     }
 
     # -----------------------------------------------------------------------
-    # Phase 12: Persist - JSON + summary + Event Log
+    # Phase 12: Forensic - Get-ClusterLog capture, only on Fail
+    # -----------------------------------------------------------------------
+    if ($results.Status -contains 'Fail') {
+        try {
+            Get-ClusterLog -Destination $ReportPath -TimeSpan $ForensicCaptureMinutes -ErrorAction Stop | Out-Null
+            Add-Result -Phase 'Forensic' -Status 'Info' `
+                -Message "Cluster log captured to $ReportPath (last $ForensicCaptureMinutes minutes)."
+        } catch {
+            Add-Result -Phase 'Forensic' -Status 'Warn' `
+                -Message "Cluster log capture failed: $($_.Exception.Message)"
+        }
+    } else {
+        Add-Result -Phase 'Forensic' -Status 'Info' `
+            -Message 'No failures detected; forensic capture skipped.'
+    }
+
+    # -----------------------------------------------------------------------
+    # Phase 13: Persist - JSON + summary + Event Log
     # -----------------------------------------------------------------------
     $results | ConvertTo-Json -Depth 6 | Set-Content -Path $jsonReport -Encoding UTF8
 

@@ -60,18 +60,19 @@ A test that only exercises the happy path is incomplete.
 appends structured records to the result accumulator and emits a
 phase-complete log line.
 
-1. PreFlight — modules + node reachability
+1. PreFlight — modules + node reachability + reusable PSSessions
 2. MPIO — global DSM claim
 3. Storage — per-node disk count + cross-node serial consistency
 4. SCSI3 — cluster reservation state
-5. Quorum — witness + quorum type *(roadmap Phase 2)*
-6. Heartbeat — cluster network thresholds *(roadmap Phase 2)*
-7. Time — W32Time skew *(roadmap Phase 2)*
-8. Reboot — pending-reboot detection *(roadmap Phase 2)*
-9. Hotfix — KB parity across nodes *(roadmap Phase 2)*
-10. ServiceAccount — FCI service account hygiene *(roadmap Phase 2)*
+5. Quorum — witness + quorum type
+6. Heartbeat — cluster network thresholds
+7. Time — cross-node W32Time skew
+8. Reboot — pending-reboot detection on every node
+9. Hotfix — KB parity across nodes
+10. ServiceAccount — Cluster + SQL service account hygiene
 11. TestCluster — Microsoft `Test-Cluster`
-12. Persist — JSON + HTML + transcript + Event Log
+12. Forensic — `Get-ClusterLog` capture, triggered only on Fail
+13. Persist — JSON + HTML + transcript + Event Log
 
 Reordering or removing a phase requires a roadmap amendment and a
 matching static test update.

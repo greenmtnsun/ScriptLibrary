@@ -71,14 +71,21 @@ Describe 'Invoke-clusterValidator.ps1 - Static' {
     }
 
     Context 'Rules §4 - orchestrator phase contract (in order)' {
-        It 'declares phase markers in monotonically increasing order' {
+        It 'declares all 13 phase markers in monotonically increasing order' {
             $expected = @(
                 '# Phase 1: PreFlight',
                 '# Phase 2: MPIO',
                 '# Phase 3: Storage',
                 '# Phase 4: SCSI3',
+                '# Phase 5: Quorum',
+                '# Phase 6: Heartbeat',
+                '# Phase 7: Time',
+                '# Phase 8: Reboot',
+                '# Phase 9: Hotfix',
+                '# Phase 10: ServiceAccount',
                 '# Phase 11: TestCluster',
-                '# Phase 12: Persist'
+                '# Phase 12: Forensic',
+                '# Phase 13: Persist'
             )
             $previous = -1
             foreach ($marker in $expected) {
@@ -121,6 +128,37 @@ Describe 'Invoke-clusterValidator.ps1 - Static' {
                 $pattern = "(?<![-\w])$([regex]::Escape($cmd))(?![-\w])"
                 $script:OrchestratorText | Should -Not -Match $pattern
             }
+        }
+    }
+
+    Context 'Roadmap Phase 2 - Validation Depth' {
+        It 'exposes -ExpectedQuorumType, -TimeSkewToleranceSeconds, -ForensicCaptureMinutes' {
+            $paramNames = $script:Ast.ParamBlock.Parameters.Name.VariablePath.UserPath
+            $paramNames | Should -Contain 'ExpectedQuorumType'
+            $paramNames | Should -Contain 'TimeSkewToleranceSeconds'
+            $paramNames | Should -Contain 'ForensicCaptureMinutes'
+        }
+        It 'invokes Get-ClusterQuorum for the Quorum phase' {
+            $script:OrchestratorText | Should -Match '(?<![-\w])Get-ClusterQuorum(?![-\w])'
+        }
+        It 'invokes Get-Cluster for heartbeat thresholds' {
+            $script:OrchestratorText | Should -Match '(?<![-\w])Get-Cluster\b\s*\|'
+        }
+        It 'invokes Get-HotFix for hotfix parity' {
+            $script:OrchestratorText | Should -Match '(?<![-\w])Get-HotFix(?![-\w])'
+        }
+        It 'invokes Get-CimInstance for service account interrogation' {
+            $script:OrchestratorText | Should -Match '(?<![-\w])Get-CimInstance(?![-\w])'
+        }
+        It 'invokes Get-ClusterLog inside the Forensic phase only on Fail' {
+            $script:OrchestratorText | Should -Match '(?<![-\w])Get-ClusterLog(?![-\w])'
+            $script:OrchestratorText | Should -Match 'results\.Status\s+-contains\s+''Fail'''
+        }
+        It 'computes time skew via UTC timestamps' {
+            $script:OrchestratorText | Should -Match '\.ToUniversalTime\(\)'
+        }
+        It 'fans out reads via the multi-session wrapper' {
+            $script:OrchestratorText | Should -Match 'Invoke-ClvRemote\s+-Sessions\b'
         }
     }
 
