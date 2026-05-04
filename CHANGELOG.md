@@ -4,6 +4,60 @@ All notable changes to the **ClusterValidator** module are documented
 here. Format follows [Keep a Changelog](https://keepachangelog.com/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.5.0] — 2026-05-03
+
+### Added
+
+- **Splunk integration artifacts** under `splunk/`. Closes part of the
+  Phase 5 SIEM-dashboard deliverable. Module surface unchanged from
+  1.4.0; this is operational glue shipped alongside the module.
+- `splunk/inputs.conf.example` — Universal Forwarder stanzas for both
+  ingestion paths (Windows Event Log EventID 4001, and the per-run
+  JSON artifact files). Path A is recommended for most deployments.
+- `splunk/props.conf` + `splunk/transforms.conf` — sourcetype config
+  for `WinEventLog:Application` (extracts the embedded JSON payload
+  from the EventID 4001 Message field) and `clustervalidator:json`
+  (parses the per-run JSON artifact arrays).
+- `splunk/eventtypes.conf` — named eventtypes:
+  `clustervalidator_run`, `_pass`, `_warn`, `_fail`, plus phase-
+  specific `_storage_fail`, `_quorum_fail`, `_scsi3_fail`,
+  `_testcluster_fail`. Decouples dashboards/alerts from the
+  underlying sourcetype.
+- `splunk/tags.conf` — ties the eventtypes to the `cluster_health`
+  tag so search and dashboards can `tag=cluster_health` without
+  knowing the implementation details.
+- `splunk/savedsearches.conf` — three alerts with throttling on
+  `CorrelationId`:
+  - **ClusterValidator - Failures in last hour** (15-minute schedule,
+    severity 4)
+  - **ClusterValidator - Quorum witness offline** (5-minute schedule,
+    severity 5, targeted on `Category=QuorumStateError`)
+  - **ClusterValidator - Hotfix drift across nodes** (daily, severity
+    2)
+- `splunk/dashboards/cluster_validator.xml` — Simple XML dashboard
+  with four KPI singles (total runs, runs with Fail, total Fail
+  records, quorum-class failures), bar chart of failures by phase,
+  pie chart of failures by §7 category, and a recent-runs table
+  with click-through drill-down by `CorrelationId`.
+- `splunk/README.md` — deployment guide, two-path architecture
+  explanation, search examples, and explicit notice that all
+  index/sourcetype names are placeholders that a Splunk admin must
+  review before deployment.
+
+### Changed
+
+- ModuleVersion bumped to 1.5.0. ManifestVersion convention is "the
+  version of the project repo as a whole," even when the change set
+  is sibling tooling rather than module code.
+
+### Notes
+
+- These artifacts were tested for syntactic correctness and structured
+  per Splunk's standard `default/local` conventions, but they have
+  **not** been deployed against a live Splunk instance from this
+  harness. Treat as a starting point your Splunk admin tunes for
+  index naming, authentication, and alert routing.
+
 ## [1.4.0] — 2026-05-03
 
 ### Added

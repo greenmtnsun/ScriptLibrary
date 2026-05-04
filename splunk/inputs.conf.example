@@ -1,0 +1,38 @@
+# ClusterValidator inputs.conf - DEPLOY TO UNIVERSAL FORWARDER
+#
+# Copy to:  $SPLUNK_HOME\etc\apps\ClusterValidator-Inputs\local\inputs.conf
+# Pick ONE or BOTH path stanzas, then uncomment.
+# Set index= to your cluster-health index name.
+
+# ---------------------------------------------------------------------------
+# Path A - Windows Event Log (compact, 1 event per validator run)
+# ---------------------------------------------------------------------------
+# Captures the EventID 4001 summary record. Most operators want this.
+#
+# [WinEventLog://Application]
+# disabled = 0
+# index = cluster_health
+# whitelist = 4001
+# whitelist1 = EventCode=%^4001$%
+# # Drop everything else from the Application log to keep volume sane.
+# # If you already collect the full Application log into a different
+# # index, omit this stanza and write a savedsearch with EventCode=4001
+# # instead.
+
+# ---------------------------------------------------------------------------
+# Path B - JSON artifact files (rich per-result data)
+# ---------------------------------------------------------------------------
+# Tails the per-run JSON files. One file = one event by default;
+# use spath/mvexpand at search time for per-record analysis.
+#
+# Adjust the path to match your -ReportPath. The file pattern is
+# ClusterValidation_<yyyyMMdd_HHmm>.json.
+#
+# [monitor://C:\Temp\ClusterValidation_*.json]
+# disabled = 0
+# index = cluster_health
+# sourcetype = clustervalidator:json
+# # Each file is written once and never appended to, so crcSalt
+# # ensures Splunk treats every new file as a new event source
+# # rather than collapsing identical-prefix content.
+# crcSalt = <SOURCE>

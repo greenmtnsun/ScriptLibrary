@@ -16,7 +16,7 @@ acceptance criteria.
 | 2 Validation Depth | ✅ done | 6 new phases + Forensic capture |
 | 3 Security Hardening | ✅ done | CLM preflight, SecretManagement, ACL hardening |
 | 4 Scale & Operability | ✅ done | ConfigPath, parallel Storage, pure helpers, Pester unit suite, PowerCLI VMware/DRS check (delivered in 1.2.0 as Phase 11) |
-| 5 Release & Fleet Rollout | ✅ done (partial) | v1.0.0 tag, CHANGELOG, RUNBOOK, SQL Agent job installer, GitHub Actions Pester workflow. Deferred (require external infra): signed-package distribution, SIEM dashboard, deployment vehicle (DSC/SCCM/Ansible) |
+| 5 Release & Fleet Rollout | ✅ done (partial) | v1.0.0–v1.5.0 tags, CHANGELOG, RUNBOOK, SQL Agent job installer, GitHub Actions Pester workflow, **Splunk integration artifacts (inputs/props/transforms/eventtypes/tags/savedsearches/dashboard) shipped in 1.5.0**. Deferred (require external infra): signed-package distribution, deployment vehicle (DSC/SCCM/Ansible), Splunk-side deployment of the artifacts |
 
 Module promotion (Rules §10) **fired** at the end of Phase 4. Code now
 ships as the **ClusterValidator** module under `.\ClusterValidator\`.

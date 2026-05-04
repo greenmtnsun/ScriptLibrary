@@ -1,0 +1,133 @@
+<dashboard version="1.1" theme="dark">
+  <label>ClusterValidator - Health Overview</label>
+  <description>
+    Cluster validator runs in the last 24 hours, broken down by phase,
+    status, and §7 category. Top panels are the at-a-glance health
+    KPIs; drill into the bottom table to inspect a specific run by
+    CorrelationId.
+  </description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="time_window">
+      <label>Time window</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+  </fieldset>
+
+  <row>
+    <panel>
+      <title>Total runs</title>
+      <single>
+        <search>
+          <query>eventtype=clustervalidator_run | stats dc(CorrelationId) as runs</query>
+          <earliest>$time_window.earliest$</earliest>
+          <latest>$time_window.latest$</latest>
+        </search>
+        <option name="rangeColors">["0x53a051","0x53a051"]</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>Runs with at least one Fail</title>
+      <single>
+        <search>
+          <query>eventtype=clustervalidator_fail | stats dc(CorrelationId) as failed_runs</query>
+          <earliest>$time_window.earliest$</earliest>
+          <latest>$time_window.latest$</latest>
+        </search>
+        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>Total Fail records</title>
+      <single>
+        <search>
+          <query>eventtype=clustervalidator_fail | stats count</query>
+          <earliest>$time_window.earliest$</earliest>
+          <latest>$time_window.latest$</latest>
+        </search>
+        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+
+    <panel>
+      <title>Quorum-class failures</title>
+      <single>
+        <search>
+          <query>eventtype=clustervalidator_fail Category=QuorumStateError | stats count</query>
+          <earliest>$time_window.earliest$</earliest>
+          <latest>$time_window.latest$</latest>
+        </search>
+        <option name="rangeColors">["0x53a051","0xdc4e41"]</option>
+        <option name="rangeValues">[0]</option>
+      </single>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Failures by phase</title>
+      <chart>
+        <search>
+          <query>eventtype=clustervalidator_fail | stats count by Phase | sort -count</query>
+          <earliest>$time_window.earliest$</earliest>
+          <latest>$time_window.latest$</latest>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.axisTitleX.text">Phase</option>
+        <option name="charting.axisTitleY.text">Fail records</option>
+        <option name="charting.legend.placement">none</option>
+      </chart>
+    </panel>
+
+    <panel>
+      <title>Failures by §7 category</title>
+      <chart>
+        <search>
+          <query>eventtype=clustervalidator_fail | stats count by Category | sort -count</query>
+          <earliest>$time_window.earliest$</earliest>
+          <latest>$time_window.latest$</latest>
+        </search>
+        <option name="charting.chart">pie</option>
+      </chart>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>Recent runs (click CorrelationId to drill)</title>
+      <table>
+        <search>
+          <query>
+            eventtype=clustervalidator_run
+            | stats min(_time) as first_seen
+                    max(_time) as last_seen
+                    count(eval(Status="Fail")) as fails
+                    count(eval(Status="Warn")) as warns
+                    count(eval(Status="Pass")) as passes
+                    values(host)              as host
+              by CorrelationId
+            | eval first_seen=strftime(first_seen,"%Y-%m-%d %H:%M:%S")
+            | eval last_seen =strftime(last_seen ,"%Y-%m-%d %H:%M:%S")
+            | sort -last_seen
+          </query>
+          <earliest>$time_window.earliest$</earliest>
+          <latest>$time_window.latest$</latest>
+        </search>
+        <option name="count">25</option>
+        <option name="dataOverlayMode">heatmap</option>
+        <drilldown>
+          <link target="_blank">
+            search?q=eventtype%3Dclustervalidator_run%20CorrelationId%3D%22$row.CorrelationId$%22&amp;earliest=$time_window.earliest$&amp;latest=$time_window.latest$
+          </link>
+        </drilldown>
+      </table>
+    </panel>
+  </row>
+</dashboard>
