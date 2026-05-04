@@ -1,0 +1,12 @@
+<nav search_view="search">
+  <view name="sql_executive_dashboard"        default="true" label="Executive" />
+  <view name="sql_operations_dashboard"                       label="Operations" />
+  <view name="sql_security_dashboard"                         label="Security" />
+  <collection label="Studio versions">
+    <view name="sql_executive_dashboard_studio"  label="Executive (Studio)" />
+    <view name="sql_operations_dashboard_studio" label="Operations (Studio)" />
+    <view name="sql_security_dashboard_studio"   label="Security (Studio)" />
+  </collection>
+  <divider />
+  <view name="search" />
+</nav>

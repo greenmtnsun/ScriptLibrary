@@ -1,0 +1,93 @@
+/* ============================================================================
+   Synthetic SQL Server event generator.
+
+   PURPOSE: Run this in a Splunk search bar (after installing the lookup +
+   eventtypes) to verify the dashboards render even before any real SQL host
+   has produced events. Each block produces one `Message` row that mimics what
+   the Universal Forwarder ingests from WinEventLog:Application.
+
+   The dashboards' base searches use eventtype names — this generator emits
+   the underlying field shape (sourcetype, SourceName, EventCode, ComputerName,
+   Message) so the eventtypes will match it. To use:
+
+     1. Install transforms.conf + lookup CSV (DEPLOY.md Step 2).
+     2. Install eventtypes.conf (DEPLOY.md Step 3).
+     3. Paste any block below into Splunk's search bar and run.
+     4. Verify it returns rows AND that `eventtype=sql_*` matches them.
+
+   These blocks use `| makeresults` so they don't write to an index. To
+   actually populate dashboards with synthetic data for a smoke test, append
+   `| collect index=<test_index> sourcetype="WinEventLog:Application"`
+   to a block — then your dashboards will pick them up.
+   ============================================================================ */
+
+/* ---- 1. Service crash on prod host (WinEventLog:System / SCM 7034) ---- */
+| makeresults count=1
+| eval _time=now(), sourcetype="WinEventLog:System", SourceName="Service Control Manager",
+       EventCode=7034, ComputerName="sqlprd01",
+       Message="The SQL Server (MSSQLSERVER) service terminated unexpectedly. It has done this 1 time(s)."
+| eval host=ComputerName
+
+/* ---- 2. Failed login burst from one IP (18456 x10) ---- */
+| makeresults count=10
+| streamstats count as i
+| eval _time=now()-i*30, sourcetype="WinEventLog:Application", SourceName="MSSQLSERVER",
+       EventCode=18456, ComputerName="sqlprd04",
+       Message="Login failed for user 'webapp_svc'. Reason: Password did not match that for the login provided. [CLIENT: 10.20.30.40]"
+| eval host=ComputerName
+
+/* ---- 3. Backup failure (3041) ---- */
+| makeresults count=1
+| eval _time=now()-300, sourcetype="WinEventLog:Application", SourceName="MSSQLSERVER",
+       EventCode=3041, ComputerName="sqlprd06",
+       Message="BACKUP failed to complete the command BACKUP DATABASE Reporting. Check the backup application log for detailed messages."
+| eval host=ComputerName
+
+/* ---- 4. Backup success (3014) ---- */
+| makeresults count=1
+| eval _time=now()-600, sourcetype="WinEventLog:Application", SourceName="MSSQLSERVER",
+       EventCode=3014, ComputerName="sqlprd06",
+       Message="BACKUP DATABASE successfully processed 1234 pages in 2.345 seconds (4.567 MB/sec)."
+| eval host=ComputerName
+
+/* ---- 5. Logical I/O error (824) ---- */
+| makeresults count=1
+| eval _time=now()-900, sourcetype="WinEventLog:Application", SourceName="MSSQLSERVER",
+       EventCode=824, ComputerName="sqlprd02",
+       Message="SQL Server detected a logical consistency-based I/O error: incorrect checksum (expected: 0x12345678; actual: 0x87654321). It occurred during a read of page (1:1234) in database ID 7."
+| eval host=ComputerName
+
+/* ---- 6. Transaction log full (9002) ---- */
+| makeresults count=1
+| eval _time=now()-1200, sourcetype="WinEventLog:Application", SourceName="MSSQLSERVER",
+       EventCode=9002, ComputerName="sqlstg01",
+       Message="The transaction log for database 'OrderProcessing' is full due to 'ACTIVE_TRANSACTION'."
+| eval host=ComputerName
+
+/* ---- 7. SQL Agent job step failure (208) ---- */
+| makeresults count=1
+| eval _time=now()-1500, sourcetype="WinEventLog:Application", SourceName="SQLSERVERAGENT",
+       EventCode=208, ComputerName="sqlprd05",
+       Message="SQL Server Scheduled Job 'Nightly Index Maintenance' (0x12AB...) - Status: Failed - Invoked on: ... Message: The job failed.  The Job was invoked by Schedule 12 (Nightly).  The last step to run was step 2 (Rebuild Indexes)."
+| eval host=ComputerName
+
+/* ---- 8. AG suspended on prod replica (35264) ---- */
+| makeresults count=1
+| eval _time=now()-1800, sourcetype="WinEventLog:Application", SourceName="MSSQLSERVER",
+       EventCode=35264, ComputerName="sqlprd02",
+       Message="AlwaysOn Availability Groups data movement for database 'CustomerData' has been suspended for the following reason: 'system' (Source ID 0; Source string: 'SUSPEND_FROM_REDO')."
+| eval host=ComputerName
+
+/* ---- 9. Custom telemetry — runaway anomaly (2001) ---- */
+| makeresults count=1
+| eval _time=now()-2100, sourcetype="WinEventLog:Application", SourceName="SQLAgentTelemetry",
+       EventCode=2001, ComputerName="sqlprd07",
+       Message="{\"State\":\"RUNAWAY_ANOMALY\",\"JobName\":\"DW_NightlyLoad\",\"CurrentDurationSeconds\":7200.5,\"HistoricalMedianSeconds\":1800.0,\"CalculatedMAD\":120.3,\"ModifiedZScore\":15.2,\"Threshold\":3.5}"
+| eval host=ComputerName
+
+/* ---- 10. Custom telemetry — stuck/locked session (1001) ---- */
+| makeresults count=1
+| eval _time=now()-2400, sourcetype="WinEventLog:Application", SourceName="SQLAgentTelemetry",
+       EventCode=1001, ComputerName="sqlprd07",
+       Message="{\"State\":\"STUCK_LOCKED\",\"SessionId\":62,\"BlockedBy\":48,\"WaitType\":\"LCK_M_X\",\"Program\":\"SQLAgent - TSQL JobStep (Job 0xABCD Step 1)\"}"
+| eval host=ComputerName

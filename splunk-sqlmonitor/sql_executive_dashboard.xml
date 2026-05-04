@@ -1,0 +1,257 @@
+<dashboard version="1.1" theme="dark">
+  <label>SQL Server Fleet — Executive View</label>
+  <description>
+    Cross-environment health KPIs for the SQL Server fleet.
+    Event-driven: relies on Windows Event Log (Application + System) forwarded by the Universal Forwarder.
+    Server inventory and environment mapping come from the sql_inventory_lookup CSV.
+  </description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="multiselect" token="env_tok" searchWhenChanged="true">
+      <label>Environment</label>
+      <choice value="dev">Dev</choice>
+      <choice value="test">Test</choice>
+      <choice value="stage">Stage</choice>
+      <choice value="prod">Prod</choice>
+      <default>dev,test,stage,prod</default>
+      <delimiter> OR env=</delimiter>
+      <prefix>(env=</prefix>
+      <suffix>)</suffix>
+    </input>
+  </fieldset>
+
+  <!-- Single base search: scope to SQL-related events on inventoried hosts only -->
+  <search id="sql_base">
+    <query>
+      eventtype=sql_engine_events OR eventtype=sql_agent_events OR eventtype=sql_service_events OR eventtype=sql_custom_telemetry
+      | eval host=lower(coalesce(ComputerName,host))
+      | lookup sql_inventory_lookup host OUTPUT env role ag_cluster owner tier
+      | where isnotnull(env)
+      | search $env_tok$
+    </query>
+    <earliest>$tr.earliest$</earliest>
+    <latest>$tr.latest$</latest>
+  </search>
+
+  <!-- ROW 1: Top-level KPIs -->
+  <row>
+    <panel>
+      <title>Servers In Scope</title>
+      <single>
+        <search>
+          <query>
+            | inputlookup sql_inventory_lookup
+            | search $env_tok$
+            | stats count
+          </query>
+        </search>
+        <option name="underLabel">monitored from inventory</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Servers Reporting (window)</title>
+      <single>
+        <search base="sql_base">
+          <query>stats dc(host) as reporting</query>
+        </search>
+        <option name="underLabel">distinct hosts seen</option>
+        <option name="colorBy">value</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Silent Servers</title>
+      <single>
+        <search>
+          <query>
+            | inputlookup sql_inventory_lookup
+            | search $env_tok$
+            | fields host env
+            | join type=left host [
+                search eventtype=sql_engine_events OR eventtype=sql_agent_events OR eventtype=sql_service_events OR eventtype=sql_custom_telemetry
+                | eval host=lower(coalesce(ComputerName,host))
+                | stats count by host
+                | fields host count
+              ]
+            | where isnull(count)
+            | stats count
+          </query>
+          <earliest>$tr.earliest$</earliest>
+          <latest>$tr.latest$</latest>
+        </search>
+        <option name="underLabel">no events in window</option>
+        <option name="colorBy">value</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,1]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Service Stops / Crashes</title>
+      <single>
+        <search base="sql_base">
+          <query>search eventtype=sql_service_events EventCode IN (7031,7034,7036) | stats count</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,1]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Failed Logins (18456)</title>
+      <single>
+        <search base="sql_base">
+          <query>search EventCode=18456 | stats count</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,25]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Backup Failures (3041)</title>
+      <single>
+        <search base="sql_base">
+          <query>search EventCode=3041 | stats count</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,1]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>SQL Agent Job Failures (208)</title>
+      <single>
+        <search base="sql_base">
+          <query>search eventtype=sql_agent_events EventCode=208 | stats count</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[0,5]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- ROW 2: Health by environment -->
+  <row>
+    <panel>
+      <title>Health Matrix by Environment</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            eval severity=case(
+                eventtype=="sql_service_events" AND EventCode IN (7031,7034),"critical",
+                EventCode IN (824,825,17066,17310,9002,1105),"critical",
+                EventCode IN (3041,833,17890),"warning",
+                EventCode==208,"warning",
+                EventCode==18456,"warning",
+                true(),"info")
+            | stats count(eval(severity=="critical")) as Critical
+                    count(eval(severity=="warning")) as Warning
+                    dc(host) as Hosts
+              by env
+            | eval Status=case(Critical&gt;0,"DOWN/CRITICAL",Warning&gt;0,"DEGRADED",true(),"OK")
+            | rename env as Environment
+            | table Environment Hosts Critical Warning Status
+            | sort Environment
+          </query>
+        </search>
+        <format type="color" field="Status">
+          <colorPalette type="map">{"OK":#53a051,"DEGRADED":#f8be34,"DOWN/CRITICAL":#dc4e41}</colorPalette>
+        </format>
+        <format type="color" field="Critical">
+          <colorPalette type="list">[#53a051,#dc4e41]</colorPalette>
+          <scale type="threshold">1</scale>
+        </format>
+        <format type="color" field="Warning">
+          <colorPalette type="list">[#53a051,#f8be34]</colorPalette>
+          <scale type="threshold">1</scale>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Critical &amp; Warning Events Over Time</title>
+      <chart>
+        <search base="sql_base">
+          <query>
+            eval severity=case(
+                eventtype=="sql_service_events" AND EventCode IN (7031,7034),"critical",
+                EventCode IN (824,825,17066,17310,9002,1105),"critical",
+                EventCode IN (3041,833,17890,208,18456),"warning",
+                true(),"info")
+            | where severity!="info"
+            | timechart span=30m count by severity
+          </query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+        <option name="charting.fieldColors">{"critical":0xdc4e41,"warning":0xf8be34}</option>
+      </chart>
+    </panel>
+  </row>
+
+  <!-- ROW 3: Worst offenders -->
+  <row>
+    <panel>
+      <title>Top 10 Hosts by Event Volume</title>
+      <chart>
+        <search base="sql_base">
+          <query>
+            stats count by host env
+            | sort - count
+            | head 10
+          </query>
+        </search>
+        <option name="charting.chart">bar</option>
+        <option name="charting.legend.placement">none</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Failed Logins by Environment</title>
+      <chart>
+        <search base="sql_base">
+          <query>search EventCode=18456 | timechart span=1h count by env</query>
+        </search>
+        <option name="charting.chart">line</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+  </row>
+
+  <!-- ROW 4: AG / cluster summary -->
+  <row>
+    <panel>
+      <title>Availability Group State Changes</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search EventCode IN (1480,35206,35264,35265,41131)
+            | eval ag_event=case(
+                EventCode==1480,"Role change",
+                EventCode==35206,"Connection timeout",
+                EventCode==35264,"Suspended",
+                EventCode==35265,"Resumed",
+                EventCode==41131,"Online")
+            | stats latest(_time) as last_seen count by env ag_cluster host ag_event
+            | eval last_seen=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+            | sort - last_seen
+            | rename env as Env ag_cluster as "AG" host as Host ag_event as Event count as Hits last_seen as "Last Seen"
+          </query>
+        </search>
+        <option name="count">15</option>
+        <option name="drilldown">none</option>
+      </table>
+    </panel>
+  </row>
+</dashboard>

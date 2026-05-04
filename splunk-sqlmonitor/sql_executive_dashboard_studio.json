@@ -1,0 +1,265 @@
+{
+  "title": "SQL Server Fleet — Executive View (Studio)",
+  "description": "Cross-environment health KPIs for the SQL Server fleet. Event-driven; relies on WinEventLog Application + System and the sql_inventory_lookup CSV.",
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time Range",
+      "options": {
+        "defaultValue": "-24h@h,now",
+        "token": "tr"
+      }
+    },
+    "input_env": {
+      "type": "input.multiselect",
+      "title": "Environment",
+      "options": {
+        "items": [
+          { "label": "Dev", "value": "dev" },
+          { "label": "Test", "value": "test" },
+          { "label": "Stage", "value": "stage" },
+          { "label": "Prod", "value": "prod" }
+        ],
+        "defaultValue": ["dev", "test", "stage", "prod"],
+        "token": "env_tok",
+        "delimiter": " OR env=",
+        "valuePrefix": "(env=",
+        "valueSuffix": ")"
+      }
+    }
+  },
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": { "earliest": "$tr.earliest$", "latest": "$tr.latest$" }
+        }
+      }
+    }
+  },
+  "dataSources": {
+    "ds_base": {
+      "type": "ds.search",
+      "name": "SQL base",
+      "options": {
+        "query": "eventtype=sql_engine_events OR eventtype=sql_agent_events OR eventtype=sql_service_events OR eventtype=sql_custom_telemetry | eval host=lower(coalesce(ComputerName,host)) | lookup sql_inventory_lookup host OUTPUT env role ag_cluster owner tier | where isnotnull(env) | search $env_tok$"
+      }
+    },
+    "ds_inventory_count": {
+      "type": "ds.search",
+      "name": "Inventory count",
+      "options": {
+        "query": "| inputlookup sql_inventory_lookup | search $env_tok$ | stats count"
+      }
+    },
+    "ds_reporting": {
+      "type": "ds.search",
+      "name": "Reporting hosts",
+      "options": {
+        "query": "eventtype=sql_engine_events OR eventtype=sql_agent_events OR eventtype=sql_service_events OR eventtype=sql_custom_telemetry | eval host=lower(coalesce(ComputerName,host)) | lookup sql_inventory_lookup host OUTPUT env | where isnotnull(env) | search $env_tok$ | stats dc(host) as reporting"
+      }
+    },
+    "ds_silent": {
+      "type": "ds.search",
+      "name": "Silent servers",
+      "options": {
+        "query": "| inputlookup sql_inventory_lookup | search $env_tok$ | fields host env | join type=left host [ search eventtype=sql_engine_events OR eventtype=sql_agent_events OR eventtype=sql_service_events OR eventtype=sql_custom_telemetry | eval host=lower(coalesce(ComputerName,host)) | stats count by host ] | where isnull(count) | stats count"
+      }
+    },
+    "ds_service_crashes": {
+      "type": "ds.search",
+      "name": "Service stops/crashes",
+      "options": {
+        "query": "eventtype=sql_service_events EventCode IN (7031,7034,7036) | eval host=lower(coalesce(ComputerName,host)) | lookup sql_inventory_lookup host OUTPUT env | where isnotnull(env) | search $env_tok$ | stats count"
+      }
+    },
+    "ds_failed_logins": {
+      "type": "ds.search",
+      "name": "Failed logins",
+      "options": {
+        "query": "eventtype=sql_engine_events EventCode=18456 | eval host=lower(coalesce(ComputerName,host)) | lookup sql_inventory_lookup host OUTPUT env | where isnotnull(env) | search $env_tok$ | stats count"
+      }
+    },
+    "ds_backup_failures": {
+      "type": "ds.search",
+      "name": "Backup failures",
+      "options": {
+        "query": "eventtype=sql_engine_events EventCode=3041 | eval host=lower(coalesce(ComputerName,host)) | lookup sql_inventory_lookup host OUTPUT env | where isnotnull(env) | search $env_tok$ | stats count"
+      }
+    },
+    "ds_job_failures": {
+      "type": "ds.search",
+      "name": "Job failures",
+      "options": {
+        "query": "eventtype=sql_agent_events EventCode=208 | eval host=lower(coalesce(ComputerName,host)) | lookup sql_inventory_lookup host OUTPUT env | where isnotnull(env) | search $env_tok$ | stats count"
+      }
+    },
+    "ds_health_matrix": {
+      "type": "ds.chain",
+      "name": "Health matrix",
+      "options": {
+        "extend": "ds_base",
+        "query": "eval severity=case(eventtype==\"sql_service_events\" AND EventCode IN (7031,7034),\"critical\", EventCode IN (824,825,17066,17310,9002,1105),\"critical\", EventCode IN (3041,833,17890,208,18456),\"warning\", true(),\"info\") | stats count(eval(severity==\"critical\")) as Critical count(eval(severity==\"warning\")) as Warning dc(host) as Hosts by env | eval Status=case(Critical>0,\"DOWN/CRITICAL\",Warning>0,\"DEGRADED\",true(),\"OK\") | rename env as Environment | table Environment Hosts Critical Warning Status | sort Environment"
+      }
+    },
+    "ds_severity_trend": {
+      "type": "ds.chain",
+      "name": "Severity trend",
+      "options": {
+        "extend": "ds_base",
+        "query": "eval severity=case(eventtype==\"sql_service_events\" AND EventCode IN (7031,7034),\"critical\", EventCode IN (824,825,17066,17310,9002,1105),\"critical\", EventCode IN (3041,833,17890,208,18456),\"warning\", true(),\"info\") | where severity!=\"info\" | timechart span=30m count by severity"
+      }
+    },
+    "ds_top_hosts": {
+      "type": "ds.chain",
+      "name": "Top hosts",
+      "options": {
+        "extend": "ds_base",
+        "query": "stats count by host env | sort - count | head 10"
+      }
+    },
+    "ds_failed_logins_by_env": {
+      "type": "ds.chain",
+      "name": "Failed logins by env",
+      "options": {
+        "extend": "ds_base",
+        "query": "search EventCode=18456 | timechart span=1h count by env"
+      }
+    },
+    "ds_ag_events": {
+      "type": "ds.chain",
+      "name": "AG events",
+      "options": {
+        "extend": "ds_base",
+        "query": "search EventCode IN (1480,35206,35264,35265,41131) | eval ag_event=case(EventCode==1480,\"Role change\", EventCode==35206,\"Connection timeout\", EventCode==35264,\"Suspended\", EventCode==35265,\"Resumed\", EventCode==41131,\"Online\") | stats latest(_time) as last_seen count by env ag_cluster host ag_event | eval last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\") | sort - last_seen | rename env as Env ag_cluster as AG host as Host ag_event as Event count as Hits last_seen as \"Last Seen\""
+      }
+    }
+  },
+  "visualizations": {
+    "viz_inventory": {
+      "type": "splunk.singlevalue",
+      "title": "Servers In Scope",
+      "dataSources": { "primary": "ds_inventory_count" },
+      "options": { "underLabel": "monitored from inventory" }
+    },
+    "viz_reporting": {
+      "type": "splunk.singlevalue",
+      "title": "Servers Reporting",
+      "dataSources": { "primary": "ds_reporting" },
+      "options": { "underLabel": "distinct hosts seen" }
+    },
+    "viz_silent": {
+      "type": "splunk.singlevalue",
+      "title": "Silent Servers",
+      "dataSources": { "primary": "ds_silent" },
+      "options": {
+        "underLabel": "no events in window",
+        "majorColor": "> threshold(value)",
+        "majorColorEditorConfig": [
+          { "value": 0, "to": 1, "color": "#53a051" },
+          { "value": 1, "color": "#dc4e41" }
+        ]
+      }
+    },
+    "viz_service_crashes": {
+      "type": "splunk.singlevalue",
+      "title": "Service Stops / Crashes",
+      "dataSources": { "primary": "ds_service_crashes" },
+      "options": {
+        "underLabel": "EventCode 7031/7034/7036",
+        "majorColor": "> threshold(value)",
+        "majorColorEditorConfig": [
+          { "value": 0, "to": 1, "color": "#53a051" },
+          { "value": 1, "color": "#dc4e41" }
+        ]
+      }
+    },
+    "viz_failed_logins": {
+      "type": "splunk.singlevalue",
+      "title": "Failed Logins (18456)",
+      "dataSources": { "primary": "ds_failed_logins" },
+      "options": {
+        "underLabel": "across selected envs",
+        "majorColor": "> threshold(value)",
+        "majorColorEditorConfig": [
+          { "value": 0, "to": 25, "color": "#53a051" },
+          { "value": 25, "color": "#f8be34" }
+        ]
+      }
+    },
+    "viz_backup_failures": {
+      "type": "splunk.singlevalue",
+      "title": "Backup Failures (3041)",
+      "dataSources": { "primary": "ds_backup_failures" },
+      "options": {
+        "majorColor": "> threshold(value)",
+        "majorColorEditorConfig": [
+          { "value": 0, "to": 1, "color": "#53a051" },
+          { "value": 1, "color": "#dc4e41" }
+        ]
+      }
+    },
+    "viz_job_failures": {
+      "type": "splunk.singlevalue",
+      "title": "SQL Agent Job Failures (208)",
+      "dataSources": { "primary": "ds_job_failures" },
+      "options": {
+        "majorColor": "> threshold(value)",
+        "majorColorEditorConfig": [
+          { "value": 0, "to": 5, "color": "#53a051" },
+          { "value": 5, "color": "#f8be34" }
+        ]
+      }
+    },
+    "viz_health_matrix": {
+      "type": "splunk.table",
+      "title": "Health Matrix by Environment",
+      "dataSources": { "primary": "ds_health_matrix" }
+    },
+    "viz_severity_trend": {
+      "type": "splunk.column",
+      "title": "Critical & Warning Events Over Time",
+      "dataSources": { "primary": "ds_severity_trend" },
+      "options": { "stackMode": "stacked", "legendDisplay": "bottom" }
+    },
+    "viz_top_hosts": {
+      "type": "splunk.bar",
+      "title": "Top 10 Hosts by Event Volume",
+      "dataSources": { "primary": "ds_top_hosts" },
+      "options": { "legendDisplay": "off" }
+    },
+    "viz_failed_logins_by_env": {
+      "type": "splunk.line",
+      "title": "Failed Logins by Environment",
+      "dataSources": { "primary": "ds_failed_logins_by_env" },
+      "options": { "legendDisplay": "bottom" }
+    },
+    "viz_ag_events": {
+      "type": "splunk.table",
+      "title": "Availability Group State Changes",
+      "dataSources": { "primary": "ds_ag_events" }
+    }
+  },
+  "layout": {
+    "type": "grid",
+    "options": { "width": 1440 },
+    "globalInputs": ["input_time", "input_env"],
+    "structure": [
+      { "item": "viz_inventory",          "type": "block", "position": { "x": 0,    "y": 0,   "w": 200, "h": 160 } },
+      { "item": "viz_reporting",          "type": "block", "position": { "x": 210,  "y": 0,   "w": 200, "h": 160 } },
+      { "item": "viz_silent",             "type": "block", "position": { "x": 420,  "y": 0,   "w": 200, "h": 160 } },
+      { "item": "viz_service_crashes",    "type": "block", "position": { "x": 630,  "y": 0,   "w": 200, "h": 160 } },
+      { "item": "viz_failed_logins",      "type": "block", "position": { "x": 840,  "y": 0,   "w": 200, "h": 160 } },
+      { "item": "viz_backup_failures",    "type": "block", "position": { "x": 1050, "y": 0,   "w": 195, "h": 160 } },
+      { "item": "viz_job_failures",       "type": "block", "position": { "x": 1255, "y": 0,   "w": 195, "h": 160 } },
+
+      { "item": "viz_health_matrix",      "type": "block", "position": { "x": 0,    "y": 170, "w": 720, "h": 280 } },
+      { "item": "viz_severity_trend",     "type": "block", "position": { "x": 730,  "y": 170, "w": 720, "h": 280 } },
+
+      { "item": "viz_top_hosts",          "type": "block", "position": { "x": 0,    "y": 460, "w": 720, "h": 320 } },
+      { "item": "viz_failed_logins_by_env","type": "block","position": { "x": 730,  "y": 460, "w": 720, "h": 320 } },
+
+      { "item": "viz_ag_events",          "type": "block", "position": { "x": 0,    "y": 790, "w": 1450, "h": 320 } }
+    ]
+  }
+}

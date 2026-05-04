@@ -1,0 +1,266 @@
+<dashboard version="1.1" theme="dark">
+  <label>SQL Server Fleet — Security View</label>
+  <description>
+    Authentication and access events for the SQL Server fleet.
+    Event-driven; no SQL Audit / Extended Events / DB Connect required.
+    Reliable signal: 18456 (failed login). Optional: 18453/18454 if "audit successful logins" is enabled at the SQL instance level.
+  </description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="multiselect" token="env_tok" searchWhenChanged="true">
+      <label>Environment</label>
+      <choice value="dev">Dev</choice>
+      <choice value="test">Test</choice>
+      <choice value="stage">Stage</choice>
+      <choice value="prod">Prod</choice>
+      <default>dev,test,stage,prod</default>
+      <delimiter> OR env=</delimiter>
+      <prefix>(env=</prefix>
+      <suffix>)</suffix>
+    </input>
+    <input type="text" token="biz_start">
+      <label>Business Hours Start (24h)</label>
+      <default>7</default>
+    </input>
+    <input type="text" token="biz_end">
+      <label>Business Hours End (24h)</label>
+      <default>19</default>
+    </input>
+  </fieldset>
+
+  <search id="auth_base">
+    <query>
+      eventtype=sql_engine_events EventCode IN (18456,18452,18453,18454)
+      | eval host=lower(coalesce(ComputerName,host))
+      | lookup sql_inventory_lookup host OUTPUT env role ag_cluster owner tier
+      | where isnotnull(env)
+      | search $env_tok$
+      | rex field=Message "(?i)Login failed for user '(?&lt;login_user&gt;[^']+)'"
+      | rex field=Message "(?i)Login succeeded for user '(?&lt;login_user_ok&gt;[^']+)'"
+      | rex field=Message "(?i)Reason:\s*(?&lt;reason&gt;[^.\r\n]+)"
+      | rex field=Message "(?i)CLIENT:\s*\[?(?&lt;client_ip&gt;[0-9a-fA-F\.\:]+)\]?"
+      | eval login_user=coalesce(login_user,login_user_ok)
+      | eval is_failed=if(EventCode IN (18456,18452),1,0)
+      | eval is_success=if(EventCode IN (18453,18454),1,0)
+      | eval is_sa=if(lower(login_user)=="sa",1,0)
+      | eval hour_local=tonumber(strftime(_time,"%H"))
+      | eval offhours=if(hour_local&lt;tonumber("$biz_start$") OR hour_local&gt;=tonumber("$biz_end$"),1,0)
+    </query>
+    <earliest>$tr.earliest$</earliest>
+    <latest>$tr.latest$</latest>
+  </search>
+
+  <!-- ROW 1: KPIs -->
+  <row>
+    <panel>
+      <title>Failed Logins</title>
+      <single>
+        <search base="auth_base">
+          <query>stats sum(is_failed) as failed</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[10,100]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Distinct Source IPs (failed)</title>
+      <single>
+        <search base="auth_base">
+          <query>where is_failed=1 | stats dc(client_ip) as ips</query>
+        </search>
+        <option name="underLabel">unique attackers</option>
+      </single>
+    </panel>
+    <panel>
+      <title>'sa' Account Attempts</title>
+      <single>
+        <search base="auth_base">
+          <query>where is_sa=1 | stats count</query>
+        </search>
+        <option name="colorBy">value</option>
+        <option name="rangeColors">["0x53a051","0xf8be34","0xdc4e41"]</option>
+        <option name="rangeValues">[1,5]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Off-Hours Logins (succeeded)</title>
+      <single>
+        <search base="auth_base">
+          <query>where is_success=1 AND offhours=1 | stats count</query>
+        </search>
+        <option name="underLabel">outside $biz_start$:00–$biz_end$:00</option>
+        <option name="colorBy">value</option>
+        <option name="rangeColors">["0x53a051","0xf8be34"]</option>
+        <option name="rangeValues">[5]</option>
+        <option name="useColors">1</option>
+      </single>
+    </panel>
+    <panel>
+      <title>Hosts Targeted</title>
+      <single>
+        <search base="auth_base">
+          <query>where is_failed=1 | stats dc(host) as h</query>
+        </search>
+        <option name="underLabel">distinct SQL hosts with failed logins</option>
+      </single>
+    </panel>
+  </row>
+
+  <!-- ROW 2: Top offenders / targets -->
+  <row>
+    <panel>
+      <title>Top Attacking Source IPs</title>
+      <table>
+        <search base="auth_base">
+          <query>
+            where is_failed=1
+            | stats count dc(login_user) as users dc(host) as targets latest(_time) as last_seen by client_ip
+            | eval last_seen=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+            | sort - count
+            | rename client_ip as "Client IP" count as Attempts users as "Users Tried" targets as "Hosts Hit" last_seen as "Last Seen"
+            | head 25
+          </query>
+        </search>
+        <format type="color" field="Attempts">
+          <colorPalette type="list">[#53a051,#f8be34,#dc4e41]</colorPalette>
+          <scale type="threshold">10,50</scale>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Top Targeted Accounts</title>
+      <table>
+        <search base="auth_base">
+          <query>
+            where is_failed=1
+            | stats count dc(client_ip) as ips dc(host) as hosts latest(_time) as last_seen by login_user
+            | eval last_seen=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+            | sort - count
+            | rename login_user as Login count as Attempts ips as "Source IPs" hosts as "Hosts Targeted" last_seen as "Last Seen"
+            | head 25
+          </query>
+        </search>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ROW 3: Failure reason breakdown + trend -->
+  <row>
+    <panel>
+      <title>Failure Reasons (18456 sub-state)</title>
+      <chart>
+        <search base="auth_base">
+          <query>
+            where is_failed=1
+            | eval reason=if(isnull(reason) OR reason="","(unparsed)",reason)
+            | stats count by reason
+            | sort - count
+          </query>
+        </search>
+        <option name="charting.chart">pie</option>
+        <option name="charting.legend.placement">right</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Failed Login Trend by Environment</title>
+      <chart>
+        <search base="auth_base">
+          <query>where is_failed=1 | timechart span=30m count by env</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+  </row>
+
+  <!-- ROW 4: Brute-force candidates + 'sa' detail -->
+  <row>
+    <panel>
+      <title>Brute-Force Candidates (≥10 fails / 5 min from one IP)</title>
+      <table>
+        <search base="auth_base">
+          <query>
+            where is_failed=1
+            | bin _time span=5m
+            | stats count by _time client_ip host env
+            | where count &gt;= 10
+            | eval window=strftime(_time,"%Y-%m-%d %H:%M")
+            | sort - _time
+            | fields window client_ip host env count
+            | rename window as "5-min Window" client_ip as "Client IP" host as Host env as Env count as Fails
+            | head 25
+          </query>
+        </search>
+        <format type="color" field="Fails">
+          <colorPalette type="list">[#f8be34,#dc4e41]</colorPalette>
+          <scale type="threshold">25</scale>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>'sa' Login Activity (success or fail)</title>
+      <table>
+        <search base="auth_base">
+          <query>
+            where is_sa=1
+            | eval result=if(is_success=1,"SUCCESS","FAIL")
+            | table _time host env client_ip result reason
+            | rename _time as Time host as Host env as Env client_ip as "Client IP" result as Result reason as Reason
+            | sort - Time
+          </query>
+        </search>
+        <option name="count">25</option>
+        <format type="color" field="Result">
+          <colorPalette type="map">{"SUCCESS":#dc4e41,"FAIL":#f8be34}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ROW 5: Off-hours successful logins -->
+  <row>
+    <panel>
+      <title>Off-Hours Successful Logins (requires SQL audit-success enabled)</title>
+      <table>
+        <search base="auth_base">
+          <query>
+            where is_success=1 AND offhours=1
+            | table _time host env login_user client_ip hour_local
+            | rename _time as Time host as Host env as Env login_user as Login client_ip as "Client IP" hour_local as "Hour"
+            | sort - Time
+          </query>
+        </search>
+        <option name="count">25</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ROW 6: Login activity per host heatmap -->
+  <row>
+    <panel>
+      <title>Failed Logins Heatmap (host × hour)</title>
+      <chart>
+        <search base="auth_base">
+          <query>
+            where is_failed=1
+            | eval hour=strftime(_time,"%H")
+            | chart count over host by hour
+          </query>
+        </search>
+        <option name="charting.chart">heatmap</option>
+        <option name="charting.legend.placement">right</option>
+      </chart>
+    </panel>
+  </row>
+</dashboard>

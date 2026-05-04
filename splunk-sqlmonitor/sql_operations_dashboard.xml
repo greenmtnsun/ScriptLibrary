@@ -1,0 +1,294 @@
+<dashboard version="1.1" theme="dark">
+  <label>SQL Server Fleet — Operations Deep-Dive</label>
+  <description>
+    Per-host event drill-down for SQL DBAs / on-call.
+    Event-driven: WinEventLog Application + System only. No add-ons required.
+  </description>
+
+  <fieldset submitButton="false" autoRun="true">
+    <input type="time" token="tr">
+      <label>Time Range</label>
+      <default>
+        <earliest>-24h@h</earliest>
+        <latest>now</latest>
+      </default>
+    </input>
+    <input type="multiselect" token="env_tok" searchWhenChanged="true">
+      <label>Environment</label>
+      <choice value="dev">Dev</choice>
+      <choice value="test">Test</choice>
+      <choice value="stage">Stage</choice>
+      <choice value="prod">Prod</choice>
+      <default>prod</default>
+      <delimiter> OR env=</delimiter>
+      <prefix>(env=</prefix>
+      <suffix>)</suffix>
+    </input>
+    <input type="dropdown" token="host_tok" searchWhenChanged="true">
+      <label>Host</label>
+      <choice value="*">All hosts in selected env(s)</choice>
+      <default>*</default>
+      <fieldForLabel>host</fieldForLabel>
+      <fieldForValue>host</fieldForValue>
+      <search>
+        <query>
+          | inputlookup sql_inventory_lookup
+          | search $env_tok$
+          | sort host
+        </query>
+      </search>
+    </input>
+  </fieldset>
+
+  <search id="sql_base">
+    <query>
+      eventtype=sql_engine_events OR eventtype=sql_agent_events OR eventtype=sql_service_events OR eventtype=sql_custom_telemetry
+      | eval host=lower(coalesce(ComputerName,host))
+      | lookup sql_inventory_lookup host OUTPUT env role ag_cluster owner tier
+      | where isnotnull(env)
+      | search $env_tok$ host=$host_tok$
+    </query>
+    <earliest>$tr.earliest$</earliest>
+    <latest>$tr.latest$</latest>
+  </search>
+
+  <!-- ROW 1: Service & connectivity -->
+  <row>
+    <panel>
+      <title>Service Control Events (Start / Stop / Crash)</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search eventtype=sql_service_events
+            | eval action=case(
+                EventCode==7036,"State change",
+                EventCode==7034,"Crashed",
+                EventCode==7031,"Terminated unexpectedly",
+                EventCode==7000,"Failed to start",
+                true(),"Other ("+EventCode+")")
+            | table _time host env action Message
+            | rename _time as Time host as Host env as Env action as Action
+            | sort - Time
+          </query>
+        </search>
+        <option name="count">15</option>
+        <format type="color" field="Action">
+          <colorPalette type="map">{"Crashed":#dc4e41,"Terminated unexpectedly":#dc4e41,"Failed to start":#dc4e41,"State change":#f8be34}</colorPalette>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Failed Logins (18456) — Top Offending Accounts</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search EventCode=18456
+            | rex field=Message "(?i)Login failed for user '(?&lt;login_user&gt;[^']+)'"
+            | rex field=Message "(?i)CLIENT:\s*\[?(?&lt;client_ip&gt;[0-9a-fA-F\.\:]+)\]?"
+            | stats count latest(_time) as last_seen by host env login_user client_ip
+            | eval last_seen=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+            | sort - count
+            | rename host as Host env as Env login_user as "Login" client_ip as "Client IP" count as Attempts last_seen as "Last Seen"
+          </query>
+        </search>
+        <option name="count">20</option>
+        <format type="color" field="Attempts">
+          <colorPalette type="list">[#53a051,#f8be34,#dc4e41]</colorPalette>
+          <scale type="threshold">5,25</scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ROW 2: Severity & I/O integrity -->
+  <row>
+    <panel>
+      <title>Severe Engine Errors</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search EventCode IN (824,825,9002,1105,17066,17310,17890)
+            | eval issue=case(
+                EventCode==824,"Logical consistency I/O error",
+                EventCode==825,"I/O retry succeeded (failing disk)",
+                EventCode==9002,"Transaction log full",
+                EventCode==1105,"Data file full",
+                EventCode==17066,"Assertion failure",
+                EventCode==17310,"Stack dump",
+                EventCode==17890,"Significant memory paging")
+            | table _time host env issue Message
+            | rename _time as Time host as Host env as Env issue as Issue
+            | sort - Time
+          </query>
+        </search>
+        <option name="count">20</option>
+        <format type="color" field="Issue">
+          <colorPalette type="map">{"Logical consistency I/O error":#dc4e41,"Stack dump":#dc4e41,"Assertion failure":#dc4e41,"Transaction log full":#dc4e41,"Data file full":#dc4e41,"I/O retry succeeded (failing disk)":#f8be34,"Significant memory paging":#f8be34}</colorPalette>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Slow I/O Warnings (833 — &gt;15s I/O)</title>
+      <chart>
+        <search base="sql_base">
+          <query>search EventCode=833 | timechart span=30m count by host limit=10</query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+  </row>
+
+  <!-- ROW 3: Backups & jobs -->
+  <row>
+    <panel>
+      <title>Backup Outcomes (3014 success / 3041 failure)</title>
+      <chart>
+        <search base="sql_base">
+          <query>
+            search EventCode IN (3014,3041)
+            | eval outcome=if(EventCode==3014,"success","failure")
+            | timechart span=1h count by outcome
+          </query>
+        </search>
+        <option name="charting.chart">column</option>
+        <option name="charting.chart.stackMode">stacked</option>
+        <option name="charting.fieldColors">{"success":0x53a051,"failure":0xdc4e41}</option>
+        <option name="charting.legend.placement">bottom</option>
+      </chart>
+    </panel>
+    <panel>
+      <title>Backup Failures by Host</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search EventCode=3041
+            | rex field=Message "(?i)database\s*['\"]?(?&lt;db&gt;[A-Za-z0-9_\-\.]+)"
+            | stats count latest(_time) as last_seen by host env db
+            | eval last_seen=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+            | sort - last_seen
+            | rename host as Host env as Env db as Database count as Failures last_seen as "Last Failure"
+          </query>
+        </search>
+        <option name="count">15</option>
+      </table>
+    </panel>
+  </row>
+
+  <row>
+    <panel>
+      <title>SQL Agent Job Failures (208) by Host</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search eventtype=sql_agent_events EventCode=208
+            | rex field=Message "(?ms)Job\s+['\"]?(?&lt;job_name&gt;[^'\"\r\n]+?)['\"]?\s"
+            | rex field=Message "(?ms)step\s+(?&lt;step_id&gt;\d+)"
+            | stats count latest(_time) as last_seen by host env job_name step_id
+            | eval last_seen=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+            | sort - count
+            | rename host as Host env as Env job_name as Job step_id as Step count as Failures last_seen as "Last Failure"
+          </query>
+        </search>
+        <option name="count">25</option>
+        <format type="color" field="Failures">
+          <colorPalette type="list">[#53a051,#f8be34,#dc4e41]</colorPalette>
+          <scale type="threshold">2,10</scale>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ROW 4: AG / cluster -->
+  <row>
+    <panel>
+      <title>Availability Group Events (1480 / 35206 / 35264 / 35265 / 41131)</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search EventCode IN (1480,35206,35264,35265,41131)
+            | eval ag_event=case(
+                EventCode==1480,"Role change",
+                EventCode==35206,"Connection timeout",
+                EventCode==35264,"Suspended",
+                EventCode==35265,"Resumed",
+                EventCode==41131,"Online")
+            | table _time host env ag_cluster role ag_event Message
+            | rename _time as Time host as Host env as Env ag_cluster as AG role as "Inv Role" ag_event as Event
+            | sort - Time
+          </query>
+        </search>
+        <option name="count">25</option>
+        <format type="color" field="Event">
+          <colorPalette type="map">{"Role change":#f8be34,"Connection timeout":#dc4e41,"Suspended":#dc4e41,"Resumed":#53a051,"Online":#53a051}</colorPalette>
+        </format>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ROW 5: Custom telemetry from Invoke-TelemetryANDAnomoly.ps1 -->
+  <row>
+    <panel>
+      <title>Custom Telemetry — Runaway Job Anomalies (Modified Z-Score)</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search eventtype=sql_custom_telemetry EventCode=2001
+            | rex field=Message "(?ms)(?&lt;json&gt;\{.*\})"
+            | spath input=json
+            | stats max(ModifiedZScore) as MaxZ
+                    max(CurrentDurationSeconds) as MaxDurSec
+                    avg(HistoricalMedianSeconds) as MedianSec
+                    count as Anomalies
+                    latest(_time) as last_seen
+              by env host JobName
+            | eval MaxZ=round(MaxZ,2),
+                   MaxDurMin=round(MaxDurSec/60,1),
+                   MedianMin=round(MedianSec/60,1),
+                   last_seen=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+            | fields env host JobName Anomalies MaxZ MaxDurMin MedianMin last_seen
+            | rename env as Env host as Host JobName as Job MaxDurMin as "Current (min)" MedianMin as "Median (min)" last_seen as "Last Seen"
+            | sort - MaxZ
+          </query>
+        </search>
+        <option name="count">15</option>
+        <format type="color" field="MaxZ">
+          <colorPalette type="list">[#53a051,#f8be34,#dc4e41]</colorPalette>
+          <scale type="threshold">3.5,7</scale>
+        </format>
+      </table>
+    </panel>
+    <panel>
+      <title>Custom Telemetry — Stuck / Locked Sessions</title>
+      <table>
+        <search base="sql_base">
+          <query>
+            search eventtype=sql_custom_telemetry EventCode=1001
+            | rex field=Message "(?ms)(?&lt;json&gt;\{.*\})"
+            | spath input=json
+            | stats latest(_time) as last_seen count by env host SessionId BlockedBy WaitType Program
+            | eval last_seen=strftime(last_seen,"%Y-%m-%d %H:%M:%S")
+            | rename env as Env host as Host SessionId as SPID BlockedBy as "Blocked By" WaitType as Wait Program as "Program" count as Hits last_seen as "Last Seen"
+            | sort - Hits
+          </query>
+        </search>
+        <option name="count">15</option>
+      </table>
+    </panel>
+  </row>
+
+  <!-- ROW 6: Raw stream -->
+  <row>
+    <panel>
+      <title>Raw Event Stream (filtered)</title>
+      <event>
+        <search base="sql_base">
+          <query>sort - _time</query>
+        </search>
+        <option name="count">25</option>
+        <option name="list.drilldown">none</option>
+      </event>
+    </panel>
+  </row>
+</dashboard>

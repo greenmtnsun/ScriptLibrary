@@ -1,0 +1,18 @@
+[]
+access  = read : [ * ], write : [ admin, sc_admin ]
+export  = system
+
+[lookups]
+export  = system
+
+[transforms]
+export  = system
+
+[eventtypes]
+export  = system
+
+[savedsearches]
+export  = system
+
+[views]
+export  = system

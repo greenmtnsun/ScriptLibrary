@@ -1,0 +1,82 @@
+name: Validate SQL Fleet artifacts
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "sql_inventory.csv"
+      - "*.xml"
+      - "*.json"
+      - "*.conf"
+      - "Makefile"
+      - "app-skeleton/**"
+      - "tests/**"
+      - ".github/workflows/validate.yml"
+  pull_request:
+    paths:
+      - "sql_inventory.csv"
+      - "*.xml"
+      - "*.json"
+      - "*.conf"
+      - "Makefile"
+      - "app-skeleton/**"
+      - "tests/**"
+      - ".github/workflows/validate.yml"
+  workflow_dispatch: {}
+
+jobs:
+  validate:
+    name: validate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run validator (XML / JSON / CSV / conf / cross-refs)
+        run: bash tests/validate.sh
+
+      - name: Build and package .spl (smoke)
+        run: make package
+
+      - name: Verify .spl contents
+        run: |
+          set -euo pipefail
+          PKG=$(ls dist/*.spl | head -1)
+          echo "Package: $PKG"
+          tar -tzf "$PKG" | sort | tee /tmp/contents.txt
+          # Required entries
+          for required in \
+              "sql_fleet/default/app.conf" \
+              "sql_fleet/default/transforms.conf" \
+              "sql_fleet/default/eventtypes.conf" \
+              "sql_fleet/default/savedsearches.conf" \
+              "sql_fleet/default/data/ui/nav/default.xml" \
+              "sql_fleet/lookups/sql_inventory.csv" \
+              "sql_fleet/metadata/default.meta" \
+              "sql_fleet/default/data/ui/views/sql_executive_dashboard.xml" \
+              "sql_fleet/default/data/ui/views/sql_operations_dashboard.xml" \
+              "sql_fleet/default/data/ui/views/sql_security_dashboard.xml" \
+              "sql_fleet/default/data/ui/views/sql_executive_dashboard_studio.xml" \
+              "sql_fleet/default/data/ui/views/sql_operations_dashboard_studio.xml" \
+              "sql_fleet/default/data/ui/views/sql_security_dashboard_studio.xml" ; do
+              grep -qx "$required" /tmp/contents.txt || { echo "MISSING: $required"; exit 1; }
+          done
+          echo "All required files present in package."
+
+      - name: Upload .spl artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sql_fleet-spl-${{ github.sha }}
+          path: dist/*.spl
+          if-no-files-found: error
+          retention-days: 30

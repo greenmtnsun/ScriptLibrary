@@ -1,0 +1,532 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — SQL Server Fleet — Executive View</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --panel-2: #20242c;
+    --panel-3: #2a2f39;
+    --border: #2e3340;
+    --border-2: #3a4050;
+    --text: #e8eaee;
+    --muted: #9097a3;
+    --dim: #6b727f;
+    --accent: #5fa8ff;
+    --green: #5cb85c;
+    --amber: #f0b631;
+    --red: #e8584c;
+    --cyan: #2cc6c6;
+    --violet: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--text); margin: 0;
+    font: 13.5px/1.5 ui-sans-serif, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); text-decoration: none; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  /* TOP NAV */
+  .topnav { display: flex; align-items: center; gap: 18px; padding: 12px 24px;
+    background: linear-gradient(180deg, #131722 0%, var(--bg) 100%);
+    border-bottom: 1px solid var(--border); }
+  .topnav .brand { font-weight: 700; letter-spacing: -0.01em; }
+  .topnav .brand .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent); margin-right: 8px; box-shadow: 0 0 0 3px rgba(95,168,255,.18); }
+  .topnav .crumb { color: var(--muted); font-size: 12.5px; }
+  .topnav .crumb a { color: var(--muted); }
+  .topnav .crumb .sep { margin: 0 6px; opacity: .6; }
+  .topnav .spacer { flex: 1; }
+  .topnav .badge { background: rgba(232,88,76,.14); color: var(--red); padding: 4px 9px;
+    border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+
+  /* HEADER */
+  header { padding: 18px 24px 14px; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0 0 4px; font-size: 19px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); font-size: 12.5px; }
+
+  /* INCIDENT STRIP */
+  .incident-strip { display: flex; align-items: center; gap: 14px; padding: 10px 24px;
+    background: linear-gradient(90deg, rgba(232,88,76,.10) 0%, rgba(232,88,76,.02) 60%, transparent 100%);
+    border-bottom: 1px solid var(--border); font-size: 12.5px; color: var(--muted); }
+  .incident-strip .pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--red);
+    animation: pulse 1.6s ease-out infinite; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(232,88,76,.5); }
+    70%  { box-shadow: 0 0 0 10px rgba(232,88,76,0); }
+    100% { box-shadow: 0 0 0 0 rgba(232,88,76,0); }
+  }
+  .incident-strip strong { color: var(--text); }
+  .incident-strip .sep { color: var(--dim); }
+
+  /* FILTERS */
+  .filters { display: flex; gap: 10px; padding: 12px 24px; background: var(--panel);
+    border-bottom: 1px solid var(--border); align-items: center; flex-wrap: wrap; }
+  .filters .lbl { color: var(--muted); font-size: 12px; margin-right: 4px; }
+  .filters .pill { background: var(--panel-2); border: 1px solid var(--border); padding: 5px 11px;
+    border-radius: 999px; font-size: 12px; cursor: default; transition: border-color .15s ease; }
+  .filters .pill.active { border-color: var(--accent); color: var(--accent);
+    background: rgba(95,168,255,.08); }
+  .filters .sep { color: var(--dim); margin: 0 6px; }
+
+  /* GRID */
+  .grid { display: grid; gap: 14px; padding: 14px 24px 26px; }
+  .row { display: grid; gap: 14px; }
+  .row.kpi   { grid-template-columns: repeat(7, 1fr); }
+  .row.split { grid-template-columns: 7fr 8fr; }
+  .row.split2 { grid-template-columns: 1fr 1fr; }
+  .row.split3 { grid-template-columns: 8fr 4fr; }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; transition: border-color .2s ease;
+    box-shadow: 0 1px 0 rgba(255,255,255,.02) inset; }
+  .panel h3 { margin: 0 0 10px; font-size: 11px; color: var(--muted); font-weight: 700;
+    text-transform: uppercase; letter-spacing: .12em; display: flex; align-items: center; gap: 8px; }
+  .panel h3 .h-tag { margin-left: auto; font-size: 10.5px; font-weight: 600; padding: 2px 7px;
+    border-radius: 4px; background: rgba(255,255,255,.04); color: var(--dim);
+    text-transform: none; letter-spacing: 0; }
+
+  /* KPI tiles */
+  .kpi .panel { padding: 14px 14px 10px; position: relative; overflow: hidden; }
+  .kpi .num { font-size: 32px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+  .kpi .sub { font-size: 11.5px; color: var(--muted); margin-top: 6px; }
+  .kpi .delta { font-size: 11px; color: var(--muted); margin-left: 8px; }
+  .kpi .delta.up   { color: var(--red); }
+  .kpi .delta.down { color: var(--green); }
+  .kpi .spark { position: absolute; right: 10px; top: 12px; opacity: .85; }
+  .kpi .spark svg { width: 70px; height: 22px; display: block; }
+
+  /* status colors */
+  .green { color: var(--green); }
+  .amber { color: var(--amber); }
+  .red   { color: var(--red); }
+  .accent { color: var(--accent); }
+
+  /* tables */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  th { font-weight: 700; color: var(--muted); font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: .1em; padding-top: 4px; padding-bottom: 8px; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+  td .env-tag { display: inline-block; padding: 1px 7px; border-radius: 3px; font-size: 11px;
+    font-weight: 600; }
+  .env-dev   { background: rgba(92,184,92,.12); color: var(--green); }
+  .env-test  { background: rgba(44,198,198,.12); color: var(--cyan); }
+  .env-stage { background: rgba(240,182,49,.12); color: var(--amber); }
+  .env-prod  { background: rgba(232,88,76,.14); color: var(--red); }
+
+  /* status badge */
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+    border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .b-ok    { background: rgba(92,184,92,.14);  color: var(--green); }
+  .b-warn  { background: rgba(240,182,49,.14); color: var(--amber); }
+  .b-crit  { background: rgba(232,88,76,.14);  color: var(--red); }
+  .b-info  { background: rgba(95,168,255,.14); color: var(--accent); }
+  .b-ok .dot   { background: var(--green); }
+  .b-warn .dot { background: var(--amber); }
+  .b-crit .dot { background: var(--red); }
+  .b-info .dot { background: var(--accent); }
+
+  /* horizontal bar */
+  .bar-row { display: grid; grid-template-columns: 130px 1fr 50px; gap: 10px; align-items: center;
+    padding: 5px 0; font-size: 12.5px; }
+  .bar-row .name { color: var(--text); }
+  .bar-row .name small { color: var(--dim); margin-left: 4px; }
+  .bar-row .bar { height: 10px; border-radius: 999px; background: linear-gradient(90deg, var(--accent), #2766b8); }
+  .bar-row .bar.amber { background: linear-gradient(90deg, var(--amber), #b58623); }
+  .bar-row .bar.red   { background: linear-gradient(90deg, var(--red), #aa3a30); }
+  .bar-row .num-r { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* legend */
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; vertical-align: middle; border-radius: 2px; }
+
+  svg { display: block; width: 100%; }
+
+  /* alerts side panel */
+  .alerts-list .row-a { display: grid; grid-template-columns: 60px 1fr auto; gap: 12px;
+    padding: 11px 0; border-top: 1px solid var(--border); align-items: start; }
+  .alerts-list .row-a:first-child { border-top: 0; padding-top: 4px; }
+  .alerts-list .tier { font-weight: 700; font-size: 11px; padding: 3px 0; text-align: center;
+    border-radius: 4px; letter-spacing: .04em; }
+  .tier-p1 { background: rgba(232,88,76,.16); color: var(--red); }
+  .tier-p2 { background: rgba(240,182,49,.16); color: var(--amber); }
+  .tier-p3 { background: rgba(95,168,255,.16); color: var(--accent); }
+  .alerts-list .what { font-weight: 600; font-size: 13px; }
+  .alerts-list .who  { color: var(--muted); font-size: 11.5px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .alerts-list .when { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+  /* watermark */
+  .watermark { position: fixed; right: 14px; bottom: 12px; padding: 5px 11px;
+    background: rgba(232,88,76,.92); color: #fff; border-radius: 4px;
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase; z-index: 99;
+    box-shadow: 0 6px 18px -8px rgba(232,88,76,.55); }
+  .footer-note { padding: 12px 24px 28px; color: var(--dim); font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <div class="brand"><span class="dot"></span>SQL Server Fleet Monitoring</div>
+  <div class="crumb"><a href="index.html">Mockup tour</a><span class="sep">›</span><span>Executive view</span></div>
+  <div class="spacer"></div>
+  <span class="badge">Sample · Mockup</span>
+</div>
+
+<header>
+  <h1>SQL Server Fleet — Executive View</h1>
+  <p>Cross-environment health KPIs · Splunk SimpleXML &amp; Dashboard Studio · 18 hosts in <code>sql_inventory_lookup</code></p>
+</header>
+
+<div class="incident-strip">
+  <span class="pulse"></span>
+  <span><strong>1 P1 active</strong> on prod (PRD-AG01 · sqlprd02 · Reporting DB · 03:14)</span>
+  <span class="sep">·</span>
+  <span><strong>2 P2 open</strong> (backup failure on sqlprd06 · runaway DW load on sqlprd07)</span>
+  <span class="sep">·</span>
+  <span><strong>1 P3</strong> failed-login burst against sqlprd04 (10.40.1.55)</span>
+</div>
+
+<div class="filters">
+  <span class="lbl">Time Range:</span>
+  <span class="pill active">Last 24 hours</span>
+  <span class="sep">·</span>
+  <span class="lbl">Environment:</span>
+  <span class="pill active">Dev</span>
+  <span class="pill active">Test</span>
+  <span class="pill active">Stage</span>
+  <span class="pill active">Prod</span>
+</div>
+
+<!-- Reusable SVG defs -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="gAccent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fa8ff" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#5fa8ff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gAmber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0b631" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#f0b631" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gRed" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8584c" stop-opacity=".65"/>
+      <stop offset="1" stop-color="#e8584c" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gGreen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5cb85c" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#5cb85c" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<div class="grid">
+
+  <!-- ROW 1: KPIs -->
+  <div class="row kpi">
+    <div class="panel">
+      <h3>Servers In Scope</h3>
+      <div class="num">18</div>
+      <div class="sub">monitored from inventory</div>
+      <div class="spark"><svg viewBox="0 0 70 22"><path d="M0 16 L10 16 L20 16 L30 16 L40 16 L50 16 L60 16 L70 16" stroke="#9097a3" stroke-width="1.4" fill="none"/></svg></div>
+    </div>
+    <div class="panel">
+      <h3>Servers Reporting</h3>
+      <div class="num green">16</div>
+      <div class="sub">distinct hosts seen</div>
+      <div class="spark"><svg viewBox="0 0 70 22"><path d="M0 6 L10 5 L20 6 L30 5 L40 6 L50 6 L60 16 L70 16" stroke="#5cb85c" stroke-width="1.4" fill="none"/></svg></div>
+    </div>
+    <div class="panel">
+      <h3>Silent Servers</h3>
+      <div class="num red">2</div>
+      <div class="sub">no events in window <span class="delta up">↑ 2</span></div>
+      <div class="spark"><svg viewBox="0 0 70 22"><path d="M0 18 L10 18 L20 18 L30 18 L40 18 L50 18 L60 6 L70 4" stroke="#e8584c" stroke-width="1.4" fill="none"/></svg></div>
+    </div>
+    <div class="panel">
+      <h3>Service Stops / Crashes</h3>
+      <div class="num amber">2</div>
+      <div class="sub">SCM 7031 / 7034 / 7036</div>
+      <div class="spark"><svg viewBox="0 0 70 22"><path d="M0 18 L8 18 L16 4 L24 18 L32 18 L40 18 L48 18 L56 12 L64 18 L70 18" stroke="#f0b631" stroke-width="1.4" fill="none"/></svg></div>
+    </div>
+    <div class="panel">
+      <h3>Failed Logins (18456)</h3>
+      <div class="num amber">47</div>
+      <div class="sub">across selected envs <span class="delta up">↑ 41</span></div>
+      <div class="spark"><svg viewBox="0 0 70 22"><path d="M0 19 L10 19 L20 19 L30 19 L40 19 L50 2 L60 16 L70 19" stroke="#f0b631" stroke-width="1.4" fill="none"/></svg></div>
+    </div>
+    <div class="panel">
+      <h3>Backup Failures (3041)</h3>
+      <div class="num red">1</div>
+      <div class="sub">unique DBs · <code>Reporting</code></div>
+      <div class="spark"><svg viewBox="0 0 70 22"><path d="M0 18 L10 18 L20 18 L30 18 L40 18 L50 6 L60 18 L70 18" stroke="#e8584c" stroke-width="1.4" fill="none"/></svg></div>
+    </div>
+    <div class="panel">
+      <h3>Job Step Failures (208)</h3>
+      <div class="num amber">3</div>
+      <div class="sub">unique steps</div>
+      <div class="spark"><svg viewBox="0 0 70 22"><path d="M0 18 L10 12 L20 18 L30 18 L40 14 L50 18 L60 8 L70 18" stroke="#f0b631" stroke-width="1.4" fill="none"/></svg></div>
+    </div>
+  </div>
+
+  <!-- ROW 2: Health matrix + severity trend -->
+  <div class="row split">
+    <div class="panel">
+      <h3>Health Matrix by Environment <span class="h-tag">snapshot</span></h3>
+      <table>
+        <thead><tr><th>Environment</th><th>Hosts</th><th>Critical</th><th>Warning</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td><span class="env-tag env-dev">dev</span></td><td>3</td><td>0</td><td>0</td><td><span class="badge b-ok"><span class="dot"></span>OK</span></td></tr>
+          <tr><td><span class="env-tag env-test">test</span></td><td>3</td><td>0</td><td>1</td><td><span class="badge b-warn"><span class="dot"></span>DEGRADED</span></td></tr>
+          <tr><td><span class="env-tag env-stage">stage</span></td><td>4</td><td>0</td><td>3</td><td><span class="badge b-warn"><span class="dot"></span>DEGRADED</span></td></tr>
+          <tr><td><span class="env-tag env-prod">prod</span></td><td>8</td><td><span class="red" style="font-weight:700">1</span></td><td>2</td><td><span class="badge b-crit"><span class="dot"></span>DOWN/CRITICAL</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h3>Critical &amp; Warning Events Over Time <span class="h-tag">last 24h · 30-min bins</span></h3>
+      <svg viewBox="0 0 600 230" preserveAspectRatio="none" style="height: 230px;">
+        <!-- annotation arrow & label -->
+        <g>
+          <line x1="119" y1="40" x2="119" y2="74" stroke="#e8584c" stroke-width="1" stroke-dasharray="3,3"/>
+          <rect x="60" y="14" width="125" height="22" rx="4" fill="#1a1f2b" stroke="#e8584c"/>
+          <text x="122" y="29" text-anchor="middle" fill="#e8584c" font-size="11" font-weight="600">P1 fired · 03:14</text>
+        </g>
+        <!-- gridlines -->
+        <g stroke="#2e3340" stroke-width="0.5">
+          <line x1="40" y1="50"  x2="590" y2="50"/>
+          <line x1="40" y1="100" x2="590" y2="100"/>
+          <line x1="40" y1="150" x2="590" y2="150"/>
+          <line x1="40" y1="200" x2="590" y2="200"/>
+        </g>
+        <g fill="#9097a3" font-size="10" font-variant-numeric="tabular-nums">
+          <text x="34" y="53"  text-anchor="end">12</text>
+          <text x="34" y="103" text-anchor="end">8</text>
+          <text x="34" y="153" text-anchor="end">4</text>
+          <text x="34" y="203" text-anchor="end">0</text>
+        </g>
+        <!-- 48 stacked bars: warning amber bottom, critical red top, rounded -->
+        <g>
+          <rect x="45.0"   y="187" width="9" height="13" rx="1.5" fill="#f0b631"/>
+          <rect x="56.5"   y="200" width="9" height="0"  rx="1.5" fill="#f0b631"/>
+          <rect x="68.0"   y="175" width="9" height="25" rx="1.5" fill="#f0b631"/>
+          <rect x="79.5"   y="160" width="9" height="40" rx="1.5" fill="#f0b631"/>
+          <rect x="91.0"   y="150" width="9" height="50" rx="1.5" fill="#f0b631"/>
+          <rect x="102.5"  y="160" width="9" height="40" rx="1.5" fill="#f0b631"/>
+          <!-- 03:00 critical spike -->
+          <rect x="114.0"  y="140" width="9" height="60" rx="1.5" fill="#f0b631"/>
+          <rect x="114.0"  y="80"  width="9" height="55" rx="1.5" fill="#e8584c"/>
+          <rect x="125.5"  y="160" width="9" height="40" rx="1.5" fill="#f0b631"/>
+          <rect x="137.0"  y="175" width="9" height="25" rx="1.5" fill="#f0b631"/>
+          <rect x="148.5"  y="187" width="9" height="13" rx="1.5" fill="#f0b631"/>
+          <rect x="160.0"  y="200" width="9" height="0"  rx="1.5" fill="#f0b631"/>
+          <rect x="171.5"  y="200" width="9" height="0"  rx="1.5" fill="#f0b631"/>
+          <rect x="183.0"  y="200" width="9" height="0"  rx="1.5" fill="#f0b631"/>
+          <rect x="194.5"  y="187" width="9" height="13" rx="1.5" fill="#f0b631"/>
+          <rect x="206.0"  y="175" width="9" height="25" rx="1.5" fill="#f0b631"/>
+          <rect x="217.5"  y="187" width="9" height="13" rx="1.5" fill="#f0b631"/>
+          <rect x="229.0"  y="200" width="9" height="0"  rx="1.5" fill="#f0b631"/>
+          <rect x="240.5"  y="187" width="9" height="13" rx="1.5" fill="#f0b631"/>
+          <rect x="252.0"  y="175" width="9" height="25" rx="1.5" fill="#f0b631"/>
+          <rect x="263.5"  y="160" width="9" height="40" rx="1.5" fill="#f0b631"/>
+          <rect x="275.0"  y="175" width="9" height="25" rx="1.5" fill="#f0b631"/>
+          <rect x="286.5"  y="187" width="9" height="13" rx="1.5" fill="#f0b631"/>
+          <rect x="298.0"  y="175" width="9" height="25" rx="1.5" fill="#f0b631"/>
+          <!-- 11:30 burst -->
+          <rect x="309.5"  y="80"  width="9" height="120" rx="1.5" fill="#f0b631"/>
+          <rect x="321.0"  y="115" width="9" height="85"  rx="1.5" fill="#f0b631"/>
+          <rect x="332.5"  y="175" width="9" height="25"  rx="1.5" fill="#f0b631"/>
+          <rect x="344.0"  y="200" width="9" height="0"   rx="1.5" fill="#f0b631"/>
+          <rect x="355.5"  y="187" width="9" height="13"  rx="1.5" fill="#f0b631"/>
+          <rect x="367.0"  y="175" width="9" height="25"  rx="1.5" fill="#f0b631"/>
+          <rect x="378.5"  y="160" width="9" height="40"  rx="1.5" fill="#f0b631"/>
+          <rect x="390.0"  y="175" width="9" height="25"  rx="1.5" fill="#f0b631"/>
+          <rect x="401.5"  y="187" width="9" height="13"  rx="1.5" fill="#f0b631"/>
+          <rect x="413.0"  y="200" width="9" height="0"   rx="1.5" fill="#f0b631"/>
+          <rect x="424.5"  y="187" width="9" height="13"  rx="1.5" fill="#f0b631"/>
+          <rect x="436.0"  y="175" width="9" height="25"  rx="1.5" fill="#f0b631"/>
+          <rect x="447.5"  y="160" width="9" height="40"  rx="1.5" fill="#f0b631"/>
+          <rect x="459.0"  y="175" width="9" height="25"  rx="1.5" fill="#f0b631"/>
+          <rect x="470.5"  y="187" width="9" height="13"  rx="1.5" fill="#f0b631"/>
+          <rect x="482.0"  y="200" width="9" height="0"   rx="1.5" fill="#f0b631"/>
+          <rect x="493.5"  y="187" width="9" height="13"  rx="1.5" fill="#f0b631"/>
+          <rect x="505.0"  y="175" width="9" height="25"  rx="1.5" fill="#f0b631"/>
+          <rect x="516.5"  y="160" width="9" height="40"  rx="1.5" fill="#f0b631"/>
+          <rect x="528.0"  y="150" width="9" height="50"  rx="1.5" fill="#f0b631"/>
+          <rect x="539.5"  y="135" width="9" height="65"  rx="1.5" fill="#f0b631"/>
+          <rect x="551.0"  y="150" width="9" height="50"  rx="1.5" fill="#f0b631"/>
+          <rect x="562.5"  y="160" width="9" height="40"  rx="1.5" fill="#f0b631"/>
+          <rect x="574.0"  y="175" width="9" height="25"  rx="1.5" fill="#f0b631"/>
+          <rect x="585.5"  y="187" width="9" height="13"  rx="1.5" fill="#f0b631"/>
+        </g>
+        <g fill="#9097a3" font-size="10" font-variant-numeric="tabular-nums">
+          <text x="50"  y="220">00:00</text>
+          <text x="170" y="220">06:00</text>
+          <text x="290" y="220">12:00</text>
+          <text x="410" y="220">18:00</text>
+          <text x="530" y="220">23:30</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <span><i style="background:var(--red)"></i>critical (4)</span>
+        <span><i style="background:var(--amber)"></i>warning (52)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 3: Top hosts + alerts sidebar -->
+  <div class="row split3">
+    <div class="panel">
+      <h3>Top 10 Hosts by Event Volume <span class="h-tag">last 24h</span></h3>
+      <div>
+        <div class="bar-row"><span class="name">sqlprd02 <small>prod</small></span><div class="bar red" style="width:96%;"></div><span class="num-r">214</span></div>
+        <div class="bar-row"><span class="name">sqlprd04 <small>prod</small></span><div class="bar amber" style="width:74%;"></div><span class="num-r">163</span></div>
+        <div class="bar-row"><span class="name">sqlstg03 <small>stage</small></span><div class="bar amber" style="width:46%;"></div><span class="num-r">102</span></div>
+        <div class="bar-row"><span class="name">sqlprd06 <small>prod</small></span><div class="bar amber" style="width:38%;"></div><span class="num-r">84</span></div>
+        <div class="bar-row"><span class="name">sqlprd07 <small>prod</small></span><div class="bar" style="width:30%;"></div><span class="num-r">67</span></div>
+        <div class="bar-row"><span class="name">sqlstg01 <small>stage</small></span><div class="bar" style="width:24%;"></div><span class="num-r">53</span></div>
+        <div class="bar-row"><span class="name">sqltst02 <small>test</small></span><div class="bar" style="width:16%;"></div><span class="num-r">35</span></div>
+        <div class="bar-row"><span class="name">sqlprd01 <small>prod</small></span><div class="bar" style="width:12%;"></div><span class="num-r">26</span></div>
+        <div class="bar-row"><span class="name">sqlprd05 <small>prod</small></span><div class="bar" style="width:8%;"></div><span class="num-r">18</span></div>
+        <div class="bar-row"><span class="name">sqldev01 <small>dev</small></span><div class="bar" style="width:5%;"></div><span class="num-r">11</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Alerts Fired in This Window <span class="h-tag">4 total</span></h3>
+      <div class="alerts-list">
+        <div class="row-a">
+          <div class="tier tier-p1">P1</div>
+          <div>
+            <div class="what">Corruption / Stack Dump</div>
+            <div class="who">sqlprd02 · prod · DB Reporting · EventID 824</div>
+          </div>
+          <div class="when">03:14</div>
+        </div>
+        <div class="row-a">
+          <div class="tier tier-p2">P2</div>
+          <div>
+            <div class="what">Backup Failure</div>
+            <div class="who">sqlprd06 · prod · DB Reporting · 24h outside SLA</div>
+          </div>
+          <div class="when">03:02</div>
+        </div>
+        <div class="row-a">
+          <div class="tier tier-p2">P2</div>
+          <div>
+            <div class="what">Runaway Job (Z = 15.2)</div>
+            <div class="who">sqlprd07 · prod · DW_NightlyLoad</div>
+          </div>
+          <div class="when">05:48</div>
+        </div>
+        <div class="row-a">
+          <div class="tier tier-p3">P3</div>
+          <div>
+            <div class="what">Failed Login Burst</div>
+            <div class="who">sqlprd04 · prod · 26 fails / 5 min from 10.40.1.55</div>
+          </div>
+          <div class="when">11:35</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 4: Failed logins by env (full width) -->
+  <div class="row">
+    <div class="panel">
+      <h3>Failed Logins by Environment <span class="h-tag">trend with area fill</span></h3>
+      <svg viewBox="0 0 1200 180" preserveAspectRatio="none" style="height: 200px;">
+        <g stroke="#2e3340" stroke-width="0.5">
+          <line x1="40" y1="20"  x2="1190" y2="20"/>
+          <line x1="40" y1="60"  x2="1190" y2="60"/>
+          <line x1="40" y1="100" x2="1190" y2="100"/>
+          <line x1="40" y1="140" x2="1190" y2="140"/>
+        </g>
+        <g fill="#9097a3" font-size="10" font-variant-numeric="tabular-nums">
+          <text x="34" y="23"  text-anchor="end">30</text>
+          <text x="34" y="63"  text-anchor="end">20</text>
+          <text x="34" y="103" text-anchor="end">10</text>
+          <text x="34" y="143" text-anchor="end">0</text>
+        </g>
+        <!-- prod red area: spike at 290..360 (11:30..12:00) -->
+        <path d="M 50 140 L 100 140 L 200 140 L 280 140 L 320 140 L 360 140 L 400 140 L 440 140 L 480 140 L 520 140 L 560 140 L 600 140 L 640 140 L 680 138 L 720 138 L 740 30 L 760 60 L 800 130 L 840 140 L 880 140 L 940 140 L 1000 140 L 1080 140 L 1180 140 L 1180 145 L 50 145 Z" fill="url(#gRed)"/>
+        <path d="M 50 140 L 100 140 L 200 140 L 280 140 L 320 140 L 360 140 L 400 140 L 440 140 L 480 140 L 520 140 L 560 140 L 600 140 L 640 140 L 680 138 L 720 138 L 740 30 L 760 60 L 800 130 L 840 140 L 880 140 L 940 140 L 1000 140 L 1080 140 L 1180 140" stroke="#e8584c" stroke-width="1.8" fill="none"/>
+        <!-- stage amber line, mostly flat with tiny bump -->
+        <path d="M 50 140 L 200 140 L 400 138 L 600 140 L 800 138 L 1000 140 L 1180 140" stroke="#f0b631" stroke-width="1.6" fill="none" stroke-dasharray="0"/>
+        <!-- test cyan, flat -->
+        <path d="M 50 142 L 1180 142" stroke="#2cc6c6" stroke-width="1.2" fill="none" opacity=".7"/>
+        <!-- dev green, flat -->
+        <path d="M 50 144 L 1180 144" stroke="#5cb85c" stroke-width="1.2" fill="none" opacity=".7"/>
+        <!-- annotation -->
+        <g>
+          <line x1="745" y1="30" x2="745" y2="14" stroke="#e8584c" stroke-width="1" stroke-dasharray="3,3"/>
+          <rect x="690" y="2" width="170" height="18" rx="4" fill="#1a1f2b" stroke="#e8584c"/>
+          <text x="775" y="14" text-anchor="middle" fill="#e8584c" font-size="11" font-weight="600">P3 fired · 11:35 · 26/5min</text>
+        </g>
+        <g fill="#9097a3" font-size="10" font-variant-numeric="tabular-nums">
+          <text x="100"  y="160">00:00</text>
+          <text x="380"  y="160">06:00</text>
+          <text x="660"  y="160">12:00</text>
+          <text x="940"  y="160">18:00</text>
+          <text x="1140" y="160">23:30</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <span><i style="background:var(--red)"></i>prod (44)</span>
+        <span><i style="background:var(--amber)"></i>stage (3)</span>
+        <span><i style="background:var(--cyan)"></i>test (0)</span>
+        <span><i style="background:var(--green)"></i>dev (0)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 5: AG events table -->
+  <div class="row">
+    <div class="panel">
+      <h3>Availability Group State Changes <span class="h-tag">last 24h</span></h3>
+      <table>
+        <thead><tr><th>Env</th><th>AG Cluster</th><th>Host</th><th>Inv Role</th><th>Event</th><th>Hits</th><th>Last Seen</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><span class="env-tag env-prod">prod</span></td>
+            <td>PRD-AG01</td><td>sqlprd02</td><td>ag-secondary</td>
+            <td><span class="badge b-crit"><span class="dot"></span>Suspended</span></td>
+            <td>1</td><td>2026-05-04 03:14:22</td>
+          </tr>
+          <tr>
+            <td><span class="env-tag env-prod">prod</span></td>
+            <td>PRD-AG01</td><td>sqlprd02</td><td>ag-secondary</td>
+            <td><span class="badge b-ok"><span class="dot"></span>Resumed</span></td>
+            <td>1</td><td>2026-05-04 03:21:08</td>
+          </tr>
+          <tr>
+            <td><span class="env-tag env-prod">prod</span></td>
+            <td>PRD-AG02</td><td>sqlprd04</td><td>ag-primary</td>
+            <td><span class="badge b-warn"><span class="dot"></span>Role change</span></td>
+            <td>1</td><td>2026-05-04 11:42:55</td>
+          </tr>
+          <tr>
+            <td><span class="env-tag env-stage">stage</span></td>
+            <td>STG-AG01</td><td>sqlstg02</td><td>ag-secondary</td>
+            <td><span class="badge b-crit"><span class="dot"></span>Connection timeout</span></td>
+            <td>2</td><td>2026-05-04 09:08:33</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer-note">
+  Mockup. Not live data. Dashboard renders identically in Splunk SimpleXML and Dashboard Studio.
+  See <code>sql_executive_dashboard.xml</code> / <code>sql_executive_dashboard_studio.json</code> for the actual searches.
+</div>
+
+<div class="watermark">Sample · Mockup</div>
+</body>
+</html>

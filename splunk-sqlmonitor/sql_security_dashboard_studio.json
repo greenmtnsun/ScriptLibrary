@@ -1,0 +1,108 @@
+{
+  "title": "SQL Server Fleet — Security View (Studio)",
+  "description": "Authentication and access events for the SQL Server fleet. Reliable signal: 18456 (failed login). Optional: 18453/18454 if SQL audit-success is enabled.",
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time Range",
+      "options": { "defaultValue": "-24h@h,now", "token": "tr" }
+    },
+    "input_env": {
+      "type": "input.multiselect",
+      "title": "Environment",
+      "options": {
+        "items": [
+          { "label": "Dev", "value": "dev" },
+          { "label": "Test", "value": "test" },
+          { "label": "Stage", "value": "stage" },
+          { "label": "Prod", "value": "prod" }
+        ],
+        "defaultValue": ["dev","test","stage","prod"],
+        "token": "env_tok",
+        "delimiter": " OR env=",
+        "valuePrefix": "(env=",
+        "valueSuffix": ")"
+      }
+    },
+    "input_biz_start": {
+      "type": "input.text",
+      "title": "Business Hours Start (24h)",
+      "options": { "defaultValue": "7", "token": "biz_start" }
+    },
+    "input_biz_end": {
+      "type": "input.text",
+      "title": "Business Hours End (24h)",
+      "options": { "defaultValue": "19", "token": "biz_end" }
+    }
+  },
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": { "earliest": "$tr.earliest$", "latest": "$tr.latest$" }
+        }
+      }
+    }
+  },
+  "dataSources": {
+    "ds_auth_base": {
+      "type": "ds.search",
+      "name": "Auth base",
+      "options": {
+        "query": "eventtype=sql_engine_events EventCode IN (18456,18452,18453,18454) | eval host=lower(coalesce(ComputerName,host)) | lookup sql_inventory_lookup host OUTPUT env role ag_cluster owner tier | where isnotnull(env) | search $env_tok$ | rex field=Message \"(?i)Login failed for user '(?<login_user>[^']+)'\" | rex field=Message \"(?i)Login succeeded for user '(?<login_user_ok>[^']+)'\" | rex field=Message \"(?i)Reason:\\s*(?<reason>[^.\\r\\n]+)\" | rex field=Message \"(?i)CLIENT:\\s*\\[?(?<client_ip>[0-9a-fA-F\\.\\:]+)\\]?\" | eval login_user=coalesce(login_user,login_user_ok) | eval is_failed=if(EventCode IN (18456,18452),1,0) | eval is_success=if(EventCode IN (18453,18454),1,0) | eval is_sa=if(lower(login_user)==\"sa\",1,0) | eval hour_local=tonumber(strftime(_time,\"%H\")) | eval offhours=if(hour_local<tonumber(\"$biz_start$\") OR hour_local>=tonumber(\"$biz_end$\"),1,0)"
+      }
+    },
+    "ds_kpi_failed":     { "type": "ds.chain", "name": "Failed total",     "options": { "extend": "ds_auth_base", "query": "stats sum(is_failed) as failed" } },
+    "ds_kpi_ips":        { "type": "ds.chain", "name": "Distinct IPs",     "options": { "extend": "ds_auth_base", "query": "where is_failed=1 | stats dc(client_ip) as ips" } },
+    "ds_kpi_sa":         { "type": "ds.chain", "name": "sa attempts",      "options": { "extend": "ds_auth_base", "query": "where is_sa=1 | stats count" } },
+    "ds_kpi_offhours":   { "type": "ds.chain", "name": "Off-hours success","options": { "extend": "ds_auth_base", "query": "where is_success=1 AND offhours=1 | stats count" } },
+    "ds_kpi_targets":    { "type": "ds.chain", "name": "Hosts targeted",   "options": { "extend": "ds_auth_base", "query": "where is_failed=1 | stats dc(host) as h" } },
+    "ds_top_ips":        { "type": "ds.chain", "name": "Top attacking IPs","options": { "extend": "ds_auth_base", "query": "where is_failed=1 | stats count dc(login_user) as users dc(host) as targets latest(_time) as last_seen by client_ip | eval last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\") | sort - count | rename client_ip as \"Client IP\" count as Attempts users as \"Users Tried\" targets as \"Hosts Hit\" last_seen as \"Last Seen\" | head 25" } },
+    "ds_top_users":      { "type": "ds.chain", "name": "Top targeted accts","options": { "extend": "ds_auth_base", "query": "where is_failed=1 | stats count dc(client_ip) as ips dc(host) as hosts latest(_time) as last_seen by login_user | eval last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\") | sort - count | rename login_user as Login count as Attempts ips as \"Source IPs\" hosts as \"Hosts Targeted\" last_seen as \"Last Seen\" | head 25" } },
+    "ds_reasons":        { "type": "ds.chain", "name": "Failure reasons",  "options": { "extend": "ds_auth_base", "query": "where is_failed=1 | eval reason=if(isnull(reason) OR reason==\"\",\"(unparsed)\",reason) | stats count by reason | sort - count" } },
+    "ds_failed_trend":   { "type": "ds.chain", "name": "Failed trend",     "options": { "extend": "ds_auth_base", "query": "where is_failed=1 | timechart span=30m count by env" } },
+    "ds_brute":          { "type": "ds.chain", "name": "Brute candidates", "options": { "extend": "ds_auth_base", "query": "where is_failed=1 | bin _time span=5m | stats count by _time client_ip host env | where count >= 10 | eval window=strftime(_time,\"%Y-%m-%d %H:%M\") | sort - _time | fields window client_ip host env count | rename window as \"5-min Window\" client_ip as \"Client IP\" host as Host env as Env count as Fails | head 25" } },
+    "ds_sa_activity":    { "type": "ds.chain", "name": "sa activity",      "options": { "extend": "ds_auth_base", "query": "where is_sa=1 | eval result=if(is_success=1,\"SUCCESS\",\"FAIL\") | table _time host env client_ip result reason | rename _time as Time host as Host env as Env client_ip as \"Client IP\" result as Result reason as Reason | sort - Time" } },
+    "ds_offhours_table": { "type": "ds.chain", "name": "Off-hours success table","options": { "extend": "ds_auth_base", "query": "where is_success=1 AND offhours=1 | table _time host env login_user client_ip hour_local | rename _time as Time host as Host env as Env login_user as Login client_ip as \"Client IP\" hour_local as Hour | sort - Time" } },
+    "ds_heatmap":        { "type": "ds.chain", "name": "Heatmap",          "options": { "extend": "ds_auth_base", "query": "where is_failed=1 | eval hour=strftime(_time,\"%H\") | chart count over host by hour" } }
+  },
+  "visualizations": {
+    "viz_kpi_failed":     { "type": "splunk.singlevalue", "title": "Failed Logins",                  "dataSources": { "primary": "ds_kpi_failed" },     "options": { "majorColor": "> threshold(value)", "majorColorEditorConfig": [ { "value": 0, "to": 10, "color": "#53a051" }, { "value": 10, "to": 100, "color": "#f8be34" }, { "value": 100, "color": "#dc4e41" } ] } },
+    "viz_kpi_ips":        { "type": "splunk.singlevalue", "title": "Distinct Source IPs (failed)",  "dataSources": { "primary": "ds_kpi_ips" },        "options": { "underLabel": "unique attackers" } },
+    "viz_kpi_sa":         { "type": "splunk.singlevalue", "title": "'sa' Account Attempts",         "dataSources": { "primary": "ds_kpi_sa" },         "options": { "majorColor": "> threshold(value)", "majorColorEditorConfig": [ { "value": 0, "to": 1, "color": "#53a051" }, { "value": 1, "to": 5, "color": "#f8be34" }, { "value": 5, "color": "#dc4e41" } ] } },
+    "viz_kpi_offhours":   { "type": "splunk.singlevalue", "title": "Off-Hours Logins (succeeded)",  "dataSources": { "primary": "ds_kpi_offhours" },   "options": { "underLabel": "outside business hours", "majorColor": "> threshold(value)", "majorColorEditorConfig": [ { "value": 0, "to": 5, "color": "#53a051" }, { "value": 5, "color": "#f8be34" } ] } },
+    "viz_kpi_targets":    { "type": "splunk.singlevalue", "title": "Hosts Targeted",                "dataSources": { "primary": "ds_kpi_targets" },    "options": { "underLabel": "distinct SQL hosts" } },
+    "viz_top_ips":        { "type": "splunk.table",       "title": "Top Attacking Source IPs",      "dataSources": { "primary": "ds_top_ips" } },
+    "viz_top_users":      { "type": "splunk.table",       "title": "Top Targeted Accounts",         "dataSources": { "primary": "ds_top_users" } },
+    "viz_reasons":        { "type": "splunk.pie",         "title": "Failure Reasons",               "dataSources": { "primary": "ds_reasons" } },
+    "viz_failed_trend":   { "type": "splunk.column",      "title": "Failed Login Trend by Env",     "dataSources": { "primary": "ds_failed_trend" }, "options": { "stackMode": "stacked", "legendDisplay": "bottom" } },
+    "viz_brute":          { "type": "splunk.table",       "title": "Brute-Force Candidates",        "dataSources": { "primary": "ds_brute" } },
+    "viz_sa_activity":    { "type": "splunk.table",       "title": "'sa' Login Activity",           "dataSources": { "primary": "ds_sa_activity" } },
+    "viz_offhours_table": { "type": "splunk.table",       "title": "Off-Hours Successful Logins",   "dataSources": { "primary": "ds_offhours_table" } },
+    "viz_heatmap":        { "type": "splunk.heatmap",     "title": "Failed Logins Heatmap (host × hour)", "dataSources": { "primary": "ds_heatmap" } }
+  },
+  "layout": {
+    "type": "grid",
+    "options": { "width": 1440 },
+    "globalInputs": ["input_time","input_env","input_biz_start","input_biz_end"],
+    "structure": [
+      { "item": "viz_kpi_failed",     "type": "block", "position": { "x": 0,    "y": 0,    "w": 280, "h": 160 } },
+      { "item": "viz_kpi_ips",        "type": "block", "position": { "x": 290,  "y": 0,    "w": 280, "h": 160 } },
+      { "item": "viz_kpi_sa",         "type": "block", "position": { "x": 580,  "y": 0,    "w": 280, "h": 160 } },
+      { "item": "viz_kpi_offhours",   "type": "block", "position": { "x": 870,  "y": 0,    "w": 280, "h": 160 } },
+      { "item": "viz_kpi_targets",    "type": "block", "position": { "x": 1160, "y": 0,    "w": 280, "h": 160 } },
+
+      { "item": "viz_top_ips",        "type": "block", "position": { "x": 0,    "y": 170,  "w": 720, "h": 360 } },
+      { "item": "viz_top_users",      "type": "block", "position": { "x": 730,  "y": 170,  "w": 720, "h": 360 } },
+
+      { "item": "viz_reasons",        "type": "block", "position": { "x": 0,    "y": 540,  "w": 720, "h": 320 } },
+      { "item": "viz_failed_trend",   "type": "block", "position": { "x": 730,  "y": 540,  "w": 720, "h": 320 } },
+
+      { "item": "viz_brute",          "type": "block", "position": { "x": 0,    "y": 870,  "w": 720, "h": 320 } },
+      { "item": "viz_sa_activity",    "type": "block", "position": { "x": 730,  "y": 870,  "w": 720, "h": 320 } },
+
+      { "item": "viz_offhours_table", "type": "block", "position": { "x": 0,    "y": 1200, "w": 1450, "h": 300 } },
+      { "item": "viz_heatmap",        "type": "block", "position": { "x": 0,    "y": 1510, "w": 1450, "h": 360 } }
+    ]
+  }
+}

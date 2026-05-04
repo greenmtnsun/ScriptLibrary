@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Mockup — SQL Server Fleet — Operations Deep-Dive</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #181b22; --panel-2: #20242c; --panel-3: #2a2f39;
+    --border: #2e3340; --border-2: #3a4050;
+    --text: #e8eaee; --muted: #9097a3; --dim: #6b727f;
+    --accent: #5fa8ff; --green: #5cb85c; --amber: #f0b631; --red: #e8584c; --cyan: #2cc6c6; --violet: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--text); margin: 0;
+    font: 13.5px/1.5 ui-sans-serif, -apple-system, "Segoe UI Variable", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); text-decoration: none; }
+  code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+
+  .topnav { display: flex; align-items: center; gap: 18px; padding: 12px 24px;
+    background: linear-gradient(180deg, #131722 0%, var(--bg) 100%); border-bottom: 1px solid var(--border); }
+  .topnav .brand { font-weight: 700; }
+  .topnav .brand .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--violet); margin-right: 8px; box-shadow: 0 0 0 3px rgba(167,139,250,.18); }
+  .topnav .crumb { color: var(--muted); font-size: 12.5px; }
+  .topnav .crumb a { color: var(--muted); }
+  .topnav .crumb .sep { margin: 0 6px; opacity: .6; }
+  .topnav .spacer { flex: 1; }
+  .topnav .badge { background: rgba(232,88,76,.14); color: var(--red); padding: 4px 9px;
+    border-radius: 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+
+  header { padding: 18px 24px 14px; border-bottom: 1px solid var(--border); }
+  header h1 { margin: 0 0 4px; font-size: 19px; letter-spacing: -0.01em; }
+  header p { margin: 0; color: var(--muted); font-size: 12.5px; }
+
+  .filters { display: flex; gap: 10px; padding: 12px 24px; background: var(--panel);
+    border-bottom: 1px solid var(--border); align-items: center; flex-wrap: wrap; }
+  .filters .lbl { color: var(--muted); font-size: 12px; margin-right: 4px; }
+  .filters .pill { background: var(--panel-2); border: 1px solid var(--border); padding: 5px 11px;
+    border-radius: 999px; font-size: 12px; }
+  .filters .pill.active { border-color: var(--accent); color: var(--accent); background: rgba(95,168,255,.08); }
+  .filters .sep { color: var(--dim); margin: 0 6px; }
+
+  .grid { display: grid; gap: 14px; padding: 14px 24px 26px; }
+  .row { display: grid; gap: 14px; }
+  .row.split2 { grid-template-columns: 1fr 1fr; }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; box-shadow: 0 1px 0 rgba(255,255,255,.02) inset; }
+  .panel h3 { margin: 0 0 10px; font-size: 11px; color: var(--muted); font-weight: 700;
+    text-transform: uppercase; letter-spacing: .12em; display: flex; align-items: center; gap: 8px; }
+  .panel h3 .h-tag { margin-left: auto; font-size: 10.5px; font-weight: 600; padding: 2px 7px;
+    border-radius: 4px; background: rgba(255,255,255,.04); color: var(--dim);
+    text-transform: none; letter-spacing: 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  th { font-weight: 700; color: var(--muted); font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: .1em; padding-top: 4px; padding-bottom: 8px; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+  td.wrap { white-space: normal; max-width: 460px; color: var(--muted); }
+  td.mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); }
+
+  .env-tag { display: inline-block; padding: 1px 7px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+  .env-dev   { background: rgba(92,184,92,.12); color: var(--green); }
+  .env-test  { background: rgba(44,198,198,.12); color: var(--cyan); }
+  .env-stage { background: rgba(240,182,49,.12); color: var(--amber); }
+  .env-prod  { background: rgba(232,88,76,.14); color: var(--red); }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px;
+    border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .badge .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .b-ok    { background: rgba(92,184,92,.14);  color: var(--green); }
+  .b-warn  { background: rgba(240,182,49,.14); color: var(--amber); }
+  .b-crit  { background: rgba(232,88,76,.14);  color: var(--red); }
+  .b-info  { background: rgba(95,168,255,.14); color: var(--accent); }
+  .b-ok .dot   { background: var(--green); }
+  .b-warn .dot { background: var(--amber); }
+  .b-crit .dot { background: var(--red); }
+  .b-info .dot { background: var(--accent); }
+
+  .legend { display: flex; gap: 14px; font-size: 11.5px; color: var(--muted); margin-top: 10px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 9px; height: 9px; margin-right: 5px; vertical-align: middle; border-radius: 2px; }
+
+  svg { display: block; width: 100%; }
+
+  .events { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px;
+    background: #13161e; padding: 12px 14px; border-radius: 6px; border: 1px solid var(--border); }
+  .events .e { padding: 6px 0; border-bottom: 1px dashed #20242c; }
+  .events .e:last-child { border-bottom: 0; }
+  .events .ts { color: var(--dim); }
+  .events .src { color: var(--cyan); }
+  .events .ec { color: var(--accent); font-weight: 600; }
+  .events .ec.crit { color: var(--red); }
+  .events .ec.warn { color: var(--amber); }
+
+  .scroll { max-height: 320px; overflow-y: auto; }
+
+  .callout { background: linear-gradient(180deg, rgba(232,88,76,.06) 0%, transparent 100%);
+    border: 1px solid rgba(232,88,76,.3); border-radius: 8px; padding: 12px 14px;
+    color: var(--text); font-size: 12.5px; margin-top: 14px; }
+  .callout strong { color: var(--red); }
+
+  .meter { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .meter .mtrack { flex: 1; height: 8px; border-radius: 999px; background: var(--panel-3); position: relative; overflow: hidden; }
+  .meter .mfill { position: absolute; inset: 0 auto 0 0;
+    background: linear-gradient(90deg, var(--green), var(--amber) 60%, var(--red)); }
+  .meter .mlabel { color: var(--muted); font-size: 11px; min-width: 80px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .topnav .badge, .watermark { font-family: inherit; }
+  .watermark { position: fixed; right: 14px; bottom: 12px; padding: 5px 11px;
+    background: rgba(232,88,76,.92); color: #fff; border-radius: 4px;
+    font-size: 11px; letter-spacing: .12em; text-transform: uppercase; z-index: 99;
+    box-shadow: 0 6px 18px -8px rgba(232,88,76,.55); }
+  .footer-note { padding: 12px 24px 28px; color: var(--dim); font-size: 11.5px; }
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <div class="brand"><span class="dot"></span>SQL Server Fleet Monitoring</div>
+  <div class="crumb"><a href="index.html">Mockup tour</a><span class="sep">›</span><span>Operations deep-dive</span></div>
+  <div class="spacer"></div>
+  <span class="badge">Sample · Mockup</span>
+</div>
+
+<header>
+  <h1>SQL Server Fleet — Operations Deep-Dive</h1>
+  <p>Per-host event drill-down for DBAs / on-call · WinEventLog Application + System</p>
+</header>
+
+<div class="filters">
+  <span class="lbl">Time Range:</span>
+  <span class="pill active">Last 24 hours</span>
+  <span class="sep">·</span>
+  <span class="lbl">Environment:</span>
+  <span class="pill active">Prod</span>
+  <span class="pill">Stage</span>
+  <span class="pill">Test</span>
+  <span class="pill">Dev</span>
+  <span class="sep">·</span>
+  <span class="lbl">Host:</span>
+  <span class="pill active">All hosts in selected env(s)</span>
+</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="gAccent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5fa8ff" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#5fa8ff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gAmber" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f0b631" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#f0b631" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gRed" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8584c" stop-opacity=".65"/>
+      <stop offset="1" stop-color="#e8584c" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="gGreen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5cb85c" stop-opacity=".55"/>
+      <stop offset="1" stop-color="#5cb85c" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<div class="grid">
+
+  <!-- ROW 1 -->
+  <div class="row split2">
+    <div class="panel">
+      <h3>Service Control Events <span class="h-tag">SCM 7000–7036</span></h3>
+      <table>
+        <thead><tr><th>Time</th><th>Host</th><th>Env</th><th>Action</th><th>Message</th></tr></thead>
+        <tbody>
+          <tr><td>03:14:08</td><td>sqlprd02</td><td><span class="env-tag env-prod">prod</span></td><td><span class="badge b-warn"><span class="dot"></span>Service stopped</span></td><td class="wrap">The MSSQLSERVER service entered the stopped state.</td></tr>
+          <tr><td>03:18:55</td><td>sqlprd02</td><td><span class="env-tag env-prod">prod</span></td><td><span class="badge b-info"><span class="dot"></span>Service running</span></td><td class="wrap">The MSSQLSERVER service entered the running state.</td></tr>
+          <tr><td>02:01:12</td><td>sqlstg03</td><td><span class="env-tag env-stage">stage</span></td><td><span class="badge b-warn"><span class="dot"></span>Service stopped</span></td><td class="wrap">The MSSQLSERVER service entered the stopped state. (scheduled patching window)</td></tr>
+          <tr><td>02:04:33</td><td>sqlstg03</td><td><span class="env-tag env-stage">stage</span></td><td><span class="badge b-info"><span class="dot"></span>Service running</span></td><td class="wrap">The MSSQLSERVER service entered the running state.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h3>Failed Logins (18456) — Top Offending Accounts <span class="h-tag">grouped by login + IP</span></h3>
+      <table>
+        <thead><tr><th>Host</th><th>Env</th><th>Login</th><th>Client IP</th><th>Attempts</th><th>Last Seen</th></tr></thead>
+        <tbody>
+          <tr><td>sqlprd04</td><td><span class="env-tag env-prod">prod</span></td><td>webapp_svc</td><td><code>10.40.1.55</code></td><td><span class="badge b-crit"><span class="dot"></span>38</span></td><td>11:42:51</td></tr>
+          <tr><td>sqlprd04</td><td><span class="env-tag env-prod">prod</span></td><td>admin</td><td><code>10.40.1.55</code></td><td><span class="badge b-warn"><span class="dot"></span>4</span></td><td>11:42:43</td></tr>
+          <tr><td>sqlprd04</td><td><span class="env-tag env-prod">prod</span></td><td>sa</td><td><code>10.40.1.55</code></td><td><span class="badge b-warn"><span class="dot"></span>2</span></td><td>11:41:08</td></tr>
+          <tr><td>sqlprd06</td><td><span class="env-tag env-prod">prod</span></td><td>etl_user</td><td><code>10.55.20.14</code></td><td>2</td><td>06:14:05</td></tr>
+          <tr><td>sqlstg01</td><td><span class="env-tag env-stage">stage</span></td><td>tester01</td><td><code>10.30.4.22</code></td><td>1</td><td>09:08:33</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ROW 2 -->
+  <div class="row split2">
+    <div class="panel">
+      <h3>Severe Engine Errors <span class="h-tag">824 / 825 / 9002 / 1105 / 17066 / 17310 / 17890</span></h3>
+      <table>
+        <thead><tr><th>Time</th><th>Host</th><th>Issue</th><th>Detail</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>03:14:02</td><td>sqlprd02</td>
+            <td><span class="badge b-crit"><span class="dot"></span>Logical I/O error</span></td>
+            <td class="wrap">EventID 824 · checksum mismatch on page (1:42191) of <code>Reporting</code>. Expected 0x12345678, actual 0x87654321.</td>
+          </tr>
+          <tr>
+            <td>13:22:11</td><td>sqlprd06</td>
+            <td><span class="badge b-warn"><span class="dot"></span>Memory paging</span></td>
+            <td class="wrap">EventID 17890 · working set 12.4 GB / committed 28.8 GB.</td>
+          </tr>
+          <tr>
+            <td>04:55:30</td><td>sqlprd06</td>
+            <td><span class="badge b-warn"><span class="dot"></span>I/O retry (failing disk)</span></td>
+            <td class="wrap">EventID 825 · read of <code>F:\Data\Reporting.mdf</code> at offset 0x000124000 succeeded after 1 retry.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout"><strong>Pattern:</strong> 824 + 825 on adjacent prod hosts both touching <code>Reporting.mdf</code> on the F: volume — this is a storage-controller signal, not a SQL bug. Open a hardware ticket alongside the DB recovery.</div>
+    </div>
+
+    <div class="panel">
+      <h3>Slow I/O Warnings (833) <span class="h-tag">&gt;15s I/O · per-host stacked</span></h3>
+      <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="height: 220px;">
+        <g stroke="#2e3340" stroke-width="0.5">
+          <line x1="40" y1="40"  x2="590" y2="40"/>
+          <line x1="40" y1="100" x2="590" y2="100"/>
+          <line x1="40" y1="160" x2="590" y2="160"/>
+          <line x1="40" y1="200" x2="590" y2="200"/>
+        </g>
+        <g fill="#9097a3" font-size="10" font-variant-numeric="tabular-nums">
+          <text x="34" y="43"  text-anchor="end">15</text>
+          <text x="34" y="103" text-anchor="end">10</text>
+          <text x="34" y="163" text-anchor="end">5</text>
+          <text x="34" y="203" text-anchor="end">0</text>
+        </g>
+        <!-- 24 hourly bins -->
+        <g>
+          <rect x="48"  y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="72"  y="188" width="18" height="12"  rx="2" fill="#e8584c"/>
+          <rect x="96"  y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="120" y="188" width="18" height="12"  rx="2" fill="#e8584c"/>
+          <rect x="144" y="170" width="18" height="30"  rx="2" fill="#e8584c"/>
+          <rect x="168" y="80"  width="18" height="120" rx="2" fill="#e8584c"/>
+          <rect x="192" y="110" width="18" height="90"  rx="2" fill="#e8584c"/>
+          <rect x="216" y="170" width="18" height="30"  rx="2" fill="#e8584c"/>
+          <rect x="240" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="264" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="288" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="312" y="188" width="18" height="12"  rx="2" fill="#e8584c"/>
+          <rect x="336" y="125" width="18" height="75"  rx="2" fill="#e8584c"/>
+          <rect x="360" y="140" width="18" height="60"  rx="2" fill="#e8584c"/>
+          <rect x="384" y="170" width="18" height="30"  rx="2" fill="#e8584c"/>
+          <rect x="408" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="432" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="456" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="480" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="504" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="528" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+          <rect x="552" y="188" width="18" height="12"  rx="2" fill="#e8584c"/>
+          <rect x="576" y="200" width="18" height="0"   rx="2" fill="#e8584c"/>
+        </g>
+        <g>
+          <line x1="170" y1="76" x2="170" y2="60" stroke="#e8584c" stroke-width="1" stroke-dasharray="3,3"/>
+          <rect x="120" y="44" width="120" height="18" rx="4" fill="#1a1f2b" stroke="#e8584c"/>
+          <text x="180" y="56" text-anchor="middle" fill="#e8584c" font-size="11" font-weight="600">05:00 · 12 events</text>
+        </g>
+        <g fill="#9097a3" font-size="10" font-variant-numeric="tabular-nums">
+          <text x="50"  y="216">00</text>
+          <text x="170" y="216">06</text>
+          <text x="290" y="216">12</text>
+          <text x="410" y="216">18</text>
+          <text x="570" y="216">23</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <span><i style="background:var(--red)"></i>sqlprd06 (24 events)</span>
+        <span><i style="background:var(--amber)"></i>sqlprd02 (3 events)</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 3 -->
+  <div class="row split2">
+    <div class="panel">
+      <h3>Backup Outcomes <span class="h-tag">3014 success / 3041 failure</span></h3>
+      <svg viewBox="0 0 600 220" preserveAspectRatio="none" style="height: 220px;">
+        <g stroke="#2e3340" stroke-width="0.5">
+          <line x1="40" y1="40"  x2="590" y2="40"/>
+          <line x1="40" y1="100" x2="590" y2="100"/>
+          <line x1="40" y1="160" x2="590" y2="160"/>
+          <line x1="40" y1="200" x2="590" y2="200"/>
+        </g>
+        <g fill="#9097a3" font-size="10" font-variant-numeric="tabular-nums">
+          <text x="34" y="43"  text-anchor="end">12</text>
+          <text x="34" y="103" text-anchor="end">8</text>
+          <text x="34" y="163" text-anchor="end">4</text>
+          <text x="34" y="203" text-anchor="end">0</text>
+        </g>
+        <g>
+          <rect x="48"  y="80"  width="18" height="120" rx="2" fill="#5cb85c"/>
+          <rect x="72"  y="50"  width="18" height="150" rx="2" fill="#5cb85c"/>
+          <rect x="96"  y="20"  width="18" height="180" rx="2" fill="#5cb85c"/>
+          <rect x="120" y="50"  width="18" height="150" rx="2" fill="#5cb85c"/>
+          <rect x="144" y="80"  width="18" height="120" rx="2" fill="#5cb85c"/>
+          <rect x="144" y="65"  width="18" height="15"  rx="2" fill="#e8584c"/>
+          <rect x="168" y="110" width="18" height="90"  rx="2" fill="#5cb85c"/>
+          <rect x="192" y="140" width="18" height="60"  rx="2" fill="#5cb85c"/>
+          <rect x="216" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="240" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="264" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="288" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="312" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="336" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="360" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="384" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="408" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="432" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="456" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="480" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="504" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="528" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="552" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+          <rect x="576" y="170" width="18" height="30"  rx="2" fill="#5cb85c"/>
+        </g>
+        <g>
+          <line x1="153" y1="63" x2="153" y2="50" stroke="#e8584c" stroke-width="1" stroke-dasharray="3,3"/>
+          <rect x="100" y="32" width="115" height="18" rx="4" fill="#1a1f2b" stroke="#e8584c"/>
+          <text x="158" y="44" text-anchor="middle" fill="#e8584c" font-size="11" font-weight="600">3041 · sqlprd06</text>
+        </g>
+        <g fill="#9097a3" font-size="10" font-variant-numeric="tabular-nums">
+          <text x="50"  y="216">00</text>
+          <text x="170" y="216">06</text>
+          <text x="290" y="216">12</text>
+          <text x="410" y="216">18</text>
+          <text x="570" y="216">23</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <span><i style="background:var(--green)"></i>success (147)</span>
+        <span><i style="background:var(--red)"></i>failure (1)</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3>Backup Failures by Host <span class="h-tag">SLA: every 24h</span></h3>
+      <table>
+        <thead><tr><th>Host</th><th>Env</th><th>Database</th><th>Failures</th><th>Last Failure</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>sqlprd06</td><td><span class="env-tag env-prod">prod</span></td>
+            <td><code>Reporting</code></td>
+            <td><span class="badge b-crit"><span class="dot"></span>1</span></td>
+            <td>03:02:14</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout">
+        <strong>Outside SLA:</strong> last successful backup of <code>Reporting</code> = <strong>2026-05-03 03:01:42</strong> (24h ago). All subsequent attempts failed.
+        Likely root cause: backup target (Azure Blob SAS token) expired — same vintage as last quarter's auth-token rotation.
+      </div>
+    </div>
+  </div>
+
+  <!-- ROW 4 -->
+  <div class="row">
+    <div class="panel">
+      <h3>SQL Agent Job Step Failures (208) <span class="h-tag">grouped by host + job</span></h3>
+      <table>
+        <thead><tr><th>Host</th><th>Env</th><th>Job</th><th>Step</th><th>Failures</th><th>Last Failure</th></tr></thead>
+        <tbody>
+          <tr><td>sqlprd05</td><td><span class="env-tag env-prod">prod</span></td><td>Nightly Index Maintenance</td><td>2 (Rebuild Indexes)</td><td><span class="badge b-warn"><span class="dot"></span>2</span></td><td>02:13:09</td></tr>
+          <tr><td>sqlprd07</td><td><span class="env-tag env-prod">prod</span></td><td>DW_NightlyLoad</td><td>4 (Validate Counts)</td><td><span class="badge b-warn"><span class="dot"></span>1</span></td><td>05:48:21</td></tr>
+          <tr><td>sqlstg03</td><td><span class="env-tag env-stage">stage</span></td><td>Cleanup_StagingTables</td><td>1 (Truncate)</td><td>1</td><td>22:00:12</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ROW 5 -->
+  <div class="row">
+    <div class="panel">
+      <h3>Availability Group Events <span class="h-tag">1480 / 35206 / 35264 / 35265 / 41131</span></h3>
+      <table>
+        <thead><tr><th>Time</th><th>Host</th><th>Env</th><th>AG</th><th>Inv Role</th><th>Event</th><th>Detail</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>03:14:22</td><td>sqlprd02</td><td><span class="env-tag env-prod">prod</span></td><td>PRD-AG01</td><td>ag-secondary</td>
+            <td><span class="badge b-crit"><span class="dot"></span>Suspended</span></td>
+            <td class="wrap">Data movement for <code>Reporting</code> suspended (SUSPEND_FROM_REDO).</td>
+          </tr>
+          <tr>
+            <td>03:21:08</td><td>sqlprd02</td><td><span class="env-tag env-prod">prod</span></td><td>PRD-AG01</td><td>ag-secondary</td>
+            <td><span class="badge b-ok"><span class="dot"></span>Resumed</span></td>
+            <td class="wrap">Data movement resumed by sysadmin.</td>
+          </tr>
+          <tr>
+            <td>11:42:55</td><td>sqlprd04</td><td><span class="env-tag env-prod">prod</span></td><td>PRD-AG02</td><td>ag-primary</td>
+            <td><span class="badge b-warn"><span class="dot"></span>Role change</span></td>
+            <td class="wrap">PRIMARY_NORMAL → RESOLVING_NORMAL.</td>
+          </tr>
+          <tr>
+            <td>09:08:33</td><td>sqlstg02</td><td><span class="env-tag env-stage">stage</span></td><td>STG-AG01</td><td>ag-secondary</td>
+            <td><span class="badge b-crit"><span class="dot"></span>Connection timeout</span></td>
+            <td class="wrap">Timeout waiting on remote replica response.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ROW 6 -->
+  <div class="row split2">
+    <div class="panel">
+      <h3>Custom Telemetry — Runaway Jobs <span class="h-tag">Modified Z-score · MAD baseline</span></h3>
+      <table>
+        <thead><tr><th>Host</th><th>Job</th><th>MaxZ</th><th>Current → Median (min)</th><th>Last Seen</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>sqlprd07</td>
+            <td>DW_NightlyLoad</td>
+            <td><span class="badge b-crit"><span class="dot"></span>15.2</span></td>
+            <td><div class="meter"><div class="mtrack"><div class="mfill" style="width: 100%"></div></div><span class="mlabel">120 / 30</span></div></td>
+            <td>05:48:21</td>
+          </tr>
+          <tr>
+            <td>sqlprd05</td>
+            <td>Nightly Index Maintenance</td>
+            <td><span class="badge b-warn"><span class="dot"></span>6.4</span></td>
+            <td><div class="meter"><div class="mtrack"><div class="mfill" style="width: 65%"></div></div><span class="mlabel">78 / 22.5</span></div></td>
+            <td>02:13:09</td>
+          </tr>
+          <tr>
+            <td>sqlstg03</td>
+            <td>Cleanup_StagingTables</td>
+            <td><span class="badge b-ok"><span class="dot"></span>3.6</span></td>
+            <td><div class="meter"><div class="mtrack"><div class="mfill" style="width: 28%"></div></div><span class="mlabel">14 / 5</span></div></td>
+            <td>22:00:12</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h3>Custom Telemetry — Stuck / Locked Sessions <span class="h-tag">EventID 1001</span></h3>
+      <table>
+        <thead><tr><th>Host</th><th>SPID</th><th>Blocked By</th><th>Wait</th><th>Program</th><th>Hits</th><th>Last Seen</th></tr></thead>
+        <tbody>
+          <tr><td>sqlprd07</td><td>62</td><td>48</td><td><code>LCK_M_X</code></td><td class="wrap">SQLAgent · Job 0xABCD Step 1</td><td>3</td><td>05:48:01</td></tr>
+          <tr><td>sqlprd05</td><td>74</td><td>66</td><td><code>PAGEIOLATCH_SH</code></td><td class="wrap">SQLAgent · Job 0xDEAD Step 2</td><td>2</td><td>02:11:55</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ROW 7 -->
+  <div class="row">
+    <div class="panel">
+      <h3>Raw Event Stream <span class="h-tag">filtered · most recent first</span></h3>
+      <div class="events scroll">
+        <div class="e"><span class="ts">2026-05-04 11:42:55</span> · host=<span class="src">sqlprd04</span> source=<span class="src">MSSQLSERVER</span> EventCode=<span class="ec warn">35264</span> The local availability replica for AG 'PRD-AG02' is changing from 'PRIMARY_NORMAL' to 'RESOLVING_NORMAL'.</div>
+        <div class="e"><span class="ts">2026-05-04 11:42:51</span> · host=<span class="src">sqlprd04</span> source=<span class="src">MSSQLSERVER</span> EventCode=<span class="ec warn">18456</span> Login failed for user 'webapp_svc'. Reason: Password did not match. [CLIENT: 10.40.1.55]</div>
+        <div class="e"><span class="ts">2026-05-04 05:48:21</span> · host=<span class="src">sqlprd07</span> source=<span class="src">SQLAgentTelemetry</span> EventCode=<span class="ec warn">2001</span> {"State":"RUNAWAY_ANOMALY","JobName":"DW_NightlyLoad","ModifiedZScore":15.2,...}</div>
+        <div class="e"><span class="ts">2026-05-04 04:55:30</span> · host=<span class="src">sqlprd06</span> source=<span class="src">MSSQLSERVER</span> EventCode=<span class="ec warn">825</span> A read of the file 'F:\Data\Reporting.mdf' at offset 0x000124000 succeeded after failing 1 time(s).</div>
+        <div class="e"><span class="ts">2026-05-04 03:21:08</span> · host=<span class="src">sqlprd02</span> source=<span class="src">MSSQLSERVER</span> EventCode=<span class="ec">35265</span> Data movement for database 'Reporting' has been resumed.</div>
+        <div class="e"><span class="ts">2026-05-04 03:18:55</span> · host=<span class="src">sqlprd02</span> source=<span class="src">Service Control Manager</span> EventCode=<span class="ec">7036</span> The MSSQLSERVER service entered the running state.</div>
+        <div class="e"><span class="ts">2026-05-04 03:14:22</span> · host=<span class="src">sqlprd02</span> source=<span class="src">MSSQLSERVER</span> EventCode=<span class="ec crit">35264</span> Data movement for database 'Reporting' has been suspended (SUSPEND_FROM_REDO).</div>
+        <div class="e"><span class="ts">2026-05-04 03:14:08</span> · host=<span class="src">sqlprd02</span> source=<span class="src">Service Control Manager</span> EventCode=<span class="ec warn">7036</span> The MSSQLSERVER service entered the stopped state.</div>
+        <div class="e"><span class="ts">2026-05-04 03:14:02</span> · host=<span class="src">sqlprd02</span> source=<span class="src">MSSQLSERVER</span> EventCode=<span class="ec crit">824</span> SQL Server detected a logical consistency-based I/O error: incorrect checksum (expected 0x12345678; actual 0x87654321). Page (1:42191) in DB Reporting.</div>
+        <div class="e"><span class="ts">2026-05-04 03:02:14</span> · host=<span class="src">sqlprd06</span> source=<span class="src">MSSQLSERVER</span> EventCode=<span class="ec warn">3041</span> BACKUP failed to complete the command BACKUP DATABASE Reporting.</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="footer-note">
+  Mockup. Not live data. Dashboard renders identically in Splunk SimpleXML and Dashboard Studio.
+  See <code>sql_operations_dashboard.xml</code> / <code>sql_operations_dashboard_studio.json</code> for the actual searches.
+</div>
+
+<div class="watermark">Sample · Mockup</div>
+</body>
+</html>

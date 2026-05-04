@@ -1,0 +1,178 @@
+{
+  "title": "SQL Server Fleet — Operations Deep-Dive (Studio)",
+  "description": "Per-host event drill-down for DBAs / on-call. Event-driven; WinEventLog Application + System only.",
+  "inputs": {
+    "input_time": {
+      "type": "input.timerange",
+      "title": "Time Range",
+      "options": { "defaultValue": "-24h@h,now", "token": "tr" }
+    },
+    "input_env": {
+      "type": "input.multiselect",
+      "title": "Environment",
+      "options": {
+        "items": [
+          { "label": "Dev", "value": "dev" },
+          { "label": "Test", "value": "test" },
+          { "label": "Stage", "value": "stage" },
+          { "label": "Prod", "value": "prod" }
+        ],
+        "defaultValue": ["prod"],
+        "token": "env_tok",
+        "delimiter": " OR env=",
+        "valuePrefix": "(env=",
+        "valueSuffix": ")"
+      }
+    },
+    "input_host": {
+      "type": "input.dropdown",
+      "title": "Host",
+      "options": {
+        "defaultValue": "*",
+        "token": "host_tok"
+      },
+      "dataSources": { "primary": "ds_host_choices" }
+    }
+  },
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": { "earliest": "$tr.earliest$", "latest": "$tr.latest$" }
+        }
+      }
+    }
+  },
+  "dataSources": {
+    "ds_host_choices": {
+      "type": "ds.search",
+      "name": "Host choices",
+      "options": {
+        "query": "| inputlookup sql_inventory_lookup | search $env_tok$ | sort host | table host"
+      }
+    },
+    "ds_base": {
+      "type": "ds.search",
+      "name": "SQL base",
+      "options": {
+        "query": "eventtype=sql_engine_events OR eventtype=sql_agent_events OR eventtype=sql_service_events OR eventtype=sql_custom_telemetry | eval host=lower(coalesce(ComputerName,host)) | lookup sql_inventory_lookup host OUTPUT env role ag_cluster owner tier | where isnotnull(env) | search $env_tok$ host=$host_tok$"
+      }
+    },
+    "ds_service_table": {
+      "type": "ds.chain",
+      "name": "Service control table",
+      "options": {
+        "extend": "ds_base",
+        "query": "search eventtype=sql_service_events | eval action=case(EventCode==7036,\"State change\", EventCode==7034,\"Crashed\", EventCode==7031,\"Terminated unexpectedly\", EventCode==7000,\"Failed to start\", true(),\"Other\") | table _time host env action Message | rename _time as Time host as Host env as Env action as Action | sort - Time"
+      }
+    },
+    "ds_failed_logins_top": {
+      "type": "ds.chain",
+      "name": "Failed login top",
+      "options": {
+        "extend": "ds_base",
+        "query": "search EventCode=18456 | rex field=Message \"(?i)Login failed for user '(?<login_user>[^']+)'\" | rex field=Message \"(?i)CLIENT:\\s*\\[?(?<client_ip>[0-9a-fA-F\\.\\:]+)\\]?\" | stats count latest(_time) as last_seen by host env login_user client_ip | eval last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\") | sort - count | rename host as Host env as Env login_user as Login client_ip as \"Client IP\" count as Attempts last_seen as \"Last Seen\""
+      }
+    },
+    "ds_severe_errors": {
+      "type": "ds.chain",
+      "name": "Severe engine errors",
+      "options": {
+        "extend": "ds_base",
+        "query": "search EventCode IN (824,825,9002,1105,17066,17310,17890) | eval issue=case(EventCode==824,\"Logical consistency I/O error\", EventCode==825,\"I/O retry succeeded (failing disk)\", EventCode==9002,\"Transaction log full\", EventCode==1105,\"Data file full\", EventCode==17066,\"Assertion failure\", EventCode==17310,\"Stack dump\", EventCode==17890,\"Significant memory paging\") | table _time host env issue Message | rename _time as Time host as Host env as Env issue as Issue | sort - Time"
+      }
+    },
+    "ds_slow_io": {
+      "type": "ds.chain",
+      "name": "Slow IO",
+      "options": {
+        "extend": "ds_base",
+        "query": "search EventCode=833 | timechart span=30m count by host limit=10"
+      }
+    },
+    "ds_backup_outcomes": {
+      "type": "ds.chain",
+      "name": "Backup outcomes",
+      "options": {
+        "extend": "ds_base",
+        "query": "search EventCode IN (3014,3041) | eval outcome=if(EventCode==3014,\"success\",\"failure\") | timechart span=1h count by outcome"
+      }
+    },
+    "ds_backup_failures_table": {
+      "type": "ds.chain",
+      "name": "Backup failures table",
+      "options": {
+        "extend": "ds_base",
+        "query": "search EventCode=3041 | rex field=Message \"(?i)database\\s*['\\\"]?(?<db>[A-Za-z0-9_\\-\\.]+)\" | stats count latest(_time) as last_seen by host env db | eval last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\") | sort - last_seen | rename host as Host env as Env db as Database count as Failures last_seen as \"Last Failure\""
+      }
+    },
+    "ds_job_failures": {
+      "type": "ds.chain",
+      "name": "SQL Agent job failures",
+      "options": {
+        "extend": "ds_base",
+        "query": "search eventtype=sql_agent_events EventCode=208 | rex field=Message \"(?ms)Job\\s+['\\\"]?(?<job_name>[^'\\\"\\r\\n]+?)['\\\"]?\\s\" | rex field=Message \"(?ms)step\\s+(?<step_id>\\d+)\" | stats count latest(_time) as last_seen by host env job_name step_id | eval last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\") | sort - count | rename host as Host env as Env job_name as Job step_id as Step count as Failures last_seen as \"Last Failure\""
+      }
+    },
+    "ds_ag_events": {
+      "type": "ds.chain",
+      "name": "AG events",
+      "options": {
+        "extend": "ds_base",
+        "query": "search EventCode IN (1480,35206,35264,35265,41131) | eval ag_event=case(EventCode==1480,\"Role change\", EventCode==35206,\"Connection timeout\", EventCode==35264,\"Suspended\", EventCode==35265,\"Resumed\", EventCode==41131,\"Online\") | table _time host env ag_cluster role ag_event Message | rename _time as Time host as Host env as Env ag_cluster as AG role as \"Inv Role\" ag_event as Event | sort - Time"
+      }
+    },
+    "ds_runaway": {
+      "type": "ds.chain",
+      "name": "Runaway anomalies",
+      "options": {
+        "extend": "ds_base",
+        "query": "search eventtype=sql_custom_telemetry EventCode=2001 | rex field=Message \"(?ms)(?<json>\\{.*\\})\" | spath input=json | stats max(ModifiedZScore) as MaxZ max(CurrentDurationSeconds) as MaxDurSec avg(HistoricalMedianSeconds) as MedianSec count as Anomalies latest(_time) as last_seen by env host JobName | eval MaxZ=round(MaxZ,2), MaxDurMin=round(MaxDurSec/60,1), MedianMin=round(MedianSec/60,1), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\") | fields env host JobName Anomalies MaxZ MaxDurMin MedianMin last_seen | rename env as Env host as Host JobName as Job MaxDurMin as \"Current (min)\" MedianMin as \"Median (min)\" last_seen as \"Last Seen\" | sort - MaxZ"
+      }
+    },
+    "ds_stuck": {
+      "type": "ds.chain",
+      "name": "Stuck sessions",
+      "options": {
+        "extend": "ds_base",
+        "query": "search eventtype=sql_custom_telemetry EventCode=1001 | rex field=Message \"(?ms)(?<json>\\{.*\\})\" | spath input=json | stats latest(_time) as last_seen count by env host SessionId BlockedBy WaitType Program | eval last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\") | rename env as Env host as Host SessionId as SPID BlockedBy as \"Blocked By\" WaitType as Wait Program as Program count as Hits last_seen as \"Last Seen\" | sort - Hits"
+      }
+    },
+    "ds_raw": {
+      "type": "ds.chain",
+      "name": "Raw stream",
+      "options": { "extend": "ds_base", "query": "sort - _time | head 50" }
+    }
+  },
+  "visualizations": {
+    "viz_service_table":          { "type": "splunk.table", "title": "Service Control Events (Start / Stop / Crash)", "dataSources": { "primary": "ds_service_table" } },
+    "viz_failed_logins_top":      { "type": "splunk.table", "title": "Failed Logins (18456) — Top Offending Accounts", "dataSources": { "primary": "ds_failed_logins_top" } },
+    "viz_severe_errors":          { "type": "splunk.table", "title": "Severe Engine Errors", "dataSources": { "primary": "ds_severe_errors" } },
+    "viz_slow_io":                { "type": "splunk.column","title": "Slow I/O Warnings (833)", "dataSources": { "primary": "ds_slow_io" }, "options": { "stackMode": "stacked", "legendDisplay": "bottom" } },
+    "viz_backup_outcomes":        { "type": "splunk.column","title": "Backup Outcomes (3014 success / 3041 failure)", "dataSources": { "primary": "ds_backup_outcomes" }, "options": { "stackMode": "stacked", "legendDisplay": "bottom" } },
+    "viz_backup_failures_table":  { "type": "splunk.table", "title": "Backup Failures by Host", "dataSources": { "primary": "ds_backup_failures_table" } },
+    "viz_job_failures":           { "type": "splunk.table", "title": "SQL Agent Job Failures (208) by Host", "dataSources": { "primary": "ds_job_failures" } },
+    "viz_ag_events":              { "type": "splunk.table", "title": "Availability Group Events", "dataSources": { "primary": "ds_ag_events" } },
+    "viz_runaway":                { "type": "splunk.table", "title": "Custom Telemetry — Runaway Job Anomalies", "dataSources": { "primary": "ds_runaway" } },
+    "viz_stuck":                  { "type": "splunk.table", "title": "Custom Telemetry — Stuck / Locked Sessions", "dataSources": { "primary": "ds_stuck" } },
+    "viz_raw":                    { "type": "splunk.events","title": "Raw Event Stream", "dataSources": { "primary": "ds_raw" } }
+  },
+  "layout": {
+    "type": "grid",
+    "options": { "width": 1440 },
+    "globalInputs": ["input_time", "input_env", "input_host"],
+    "structure": [
+      { "item": "viz_service_table",         "type": "block", "position": { "x": 0,    "y": 0,    "w": 720,  "h": 320 } },
+      { "item": "viz_failed_logins_top",     "type": "block", "position": { "x": 730,  "y": 0,    "w": 720,  "h": 320 } },
+      { "item": "viz_severe_errors",         "type": "block", "position": { "x": 0,    "y": 330,  "w": 720,  "h": 320 } },
+      { "item": "viz_slow_io",               "type": "block", "position": { "x": 730,  "y": 330,  "w": 720,  "h": 320 } },
+      { "item": "viz_backup_outcomes",       "type": "block", "position": { "x": 0,    "y": 660,  "w": 720,  "h": 320 } },
+      { "item": "viz_backup_failures_table", "type": "block", "position": { "x": 730,  "y": 660,  "w": 720,  "h": 320 } },
+      { "item": "viz_job_failures",          "type": "block", "position": { "x": 0,    "y": 990,  "w": 1450, "h": 320 } },
+      { "item": "viz_ag_events",             "type": "block", "position": { "x": 0,    "y": 1320, "w": 1450, "h": 320 } },
+      { "item": "viz_runaway",               "type": "block", "position": { "x": 0,    "y": 1650, "w": 720,  "h": 320 } },
+      { "item": "viz_stuck",                 "type": "block", "position": { "x": 730,  "y": 1650, "w": 720,  "h": 320 } },
+      { "item": "viz_raw",                   "type": "block", "position": { "x": 0,    "y": 1980, "w": 1450, "h": 360 } }
+    ]
+  }
+}
