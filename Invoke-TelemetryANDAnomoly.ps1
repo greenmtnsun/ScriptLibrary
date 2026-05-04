@@ -199,9 +199,7 @@ if ($activeJobs.Count -eq 0) {
 # ---------------------------------------------------------------------------
 foreach ($job in $activeJobs) {
 
-    # StartDate is the active execution's start. LastRunDate (the previous
-    # symbol used here) is the last completion time of any previous run -
-    # using it would make the current "duration" wildly negative or wrong.
+    # StartDate is the active execution's start time on the running job.
     if (-not $job.StartDate) {
         Write-Verbose "Job '$($job.Name)' has no StartDate; skipping."
         continue
